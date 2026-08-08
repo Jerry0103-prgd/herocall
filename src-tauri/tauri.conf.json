@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AStock AI Workbench",
+  "productName": "Hero Call",
   "version": "0.9.0",
   "identifier": "com.astockai.workbench",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "A股个人AI投研工作台",
+        "title": "Hero Call",
         "width": 1100,
         "height": 720,
         "minWidth": 900,

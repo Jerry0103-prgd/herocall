@@ -92,7 +92,7 @@ export function FirstRunWizard({ onCompleted }: FirstRunWizardProps) {
     <div className="first-run-overlay" role="dialog" aria-modal="true" aria-labelledby="first-run-title">
       <section className="first-run-wizard">
         <p className="eyebrow">First-run setup</p>
-        <h1 id="first-run-title">欢迎使用 AStock AI Workbench</h1>
+        <h1 id="first-run-title">欢迎使用 Hero Call</h1>
         <p className="first-run-intro">可选设置均可跳过，稍后可在“设置”或“我的持仓”中继续维护。本应用不连接券商，也不提供下单能力。</p>
 
         <ol className="first-run-progress" aria-label="初始化步骤">

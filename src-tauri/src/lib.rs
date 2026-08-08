@@ -278,5 +278,5 @@ pub fn run() {
             complete_initialization
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run AStock AI Workbench");
+        .expect("failed to run Hero Call");
 }
