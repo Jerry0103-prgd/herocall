@@ -7,7 +7,7 @@
 ## 2. 分层
 
 ```text
-React/TypeScript UI（侧栏、Dashboard 页面）
+React/TypeScript UI（侧栏、Dashboard、Portfolio 页面）
   └─ Tauri command / event 边界
        └─ Rust application services（含只读 Dashboard 查询服务）
             ├─ Domain：持仓、交易、T+1、盈亏、复盘规则
@@ -31,6 +31,8 @@ React/TypeScript UI（侧栏、Dashboard 页面）
 | Review AI | 证据选择、结构化生成、人工复盘保存 | 强制 FACTS/INFERENCES/RISKS；不得提供交易承诺 |
 
 Phase 5-A 的 Dashboard 通过 `get_asset_summary` 与 `get_market_snapshot` 两个 Tauri Command 读取 Rust 只读服务。当前报告聚合和指数持久化尚未实现，因此 Command 返回 `null` / `NO_DATA`，界面必须显示“暂无数据”，不得将缺失数据替换为零或演示价格。
+
+Phase 5-B 的 Portfolio 页面通过 `get_portfolio_holdings`、`create_portfolio_holding`、`update_portfolio_holding` 与 `delete_portfolio_holding` Command 访问 Rust 应用服务。前端不得计算成本金额、市值、今日盈亏或总盈亏；Rust 使用 Portfolio Service 的精确 decimal 计算及 Market Service 的有效行情状态判断。没有可验证行情时，相关字段为“暂无数据”。
 
 ## 4. 数据流与质量控制
 

@@ -92,6 +92,7 @@ pub enum PortfolioError {
         available: i64,
     },
     TradeRuleUnknown,
+    InvalidAvailableQuantity,
 }
 
 impl fmt::Display for PortfolioError {
@@ -130,6 +131,7 @@ impl fmt::Display for PortfolioError {
                 "transaction {transaction_id} sells {requested} shares but only {available} are available"
             ),
             Self::TradeRuleUnknown => write!(formatter, "sellable quantity is unavailable for UNKNOWN trade rule"),
+            Self::InvalidAvailableQuantity => write!(formatter, "available quantity is invalid"),
         }
     }
 }
@@ -190,6 +192,44 @@ impl PortfolioService {
             market_value,
             unrealized_pnl: market_value - position.cost_amount,
         }
+    }
+
+    /// Builds a position from a user-entered opening balance. This is a local ledger position,
+    /// not an order or a simulated market transaction. The caller owns audit metadata and storage.
+    pub fn position_from_opening_balance(
+        &self,
+        quantity: i64,
+        available_quantity: i64,
+        average_cost: Decimal,
+    ) -> Result<Position, PortfolioError> {
+        if quantity <= 0 {
+            return Err(PortfolioError::InvalidQuantity { transaction_id: 0 });
+        }
+        if average_cost.is_sign_negative() {
+            return Err(PortfolioError::InvalidPrice { transaction_id: 0 });
+        }
+        if available_quantity < 0 || available_quantity > quantity {
+            return Err(PortfolioError::InvalidAvailableQuantity);
+        }
+        Ok(Position {
+            quantity,
+            available_quantity: (self.trade_rule != TradeRule::Unknown)
+                .then_some(available_quantity),
+            average_cost,
+            cost_amount: Decimal::from(quantity) * average_cost,
+            realized_pnl: Decimal::ZERO,
+        })
+    }
+
+    /// Today's price-only P&L uses the source-backed previous close. Fees and realized P&L are
+    /// intentionally excluded, matching the V1.0 daily P&L definition.
+    pub fn daily_pnl(
+        &self,
+        position: &Position,
+        current_price: Decimal,
+        previous_close: Decimal,
+    ) -> Decimal {
+        Decimal::from(position.quantity) * (current_price - previous_close)
     }
 
     /// Applies the configured lower bound when an upstream brokerage-rate calculation needs it.
@@ -586,6 +626,24 @@ mod tests {
         assert_eq!(
             engine.calculate(&[buy, sell]),
             Err(PortfolioError::TradeRuleUnknown)
+        );
+    }
+
+    #[test]
+    fn opening_balance_and_daily_pnl_are_calculated_in_rust() {
+        let engine = stock_service();
+        let position = engine
+            .position_from_opening_balance(200, 200, decimal("10.50"))
+            .expect("valid opening balance");
+        let valuation = engine.value_position(&position, decimal("11.20"));
+
+        assert_eq!(position.cost_amount, decimal("2100"));
+        assert_eq!(position.available_quantity, Some(200));
+        assert_eq!(valuation.market_value, decimal("2240"));
+        assert_eq!(valuation.unrealized_pnl, decimal("140"));
+        assert_eq!(
+            engine.daily_pnl(&position, decimal("11.20"), decimal("11.00")),
+            decimal("40")
         );
     }
 }

@@ -223,6 +223,12 @@ pub trait MarketSnapshotStore {
 pub struct MarketService;
 
 impl MarketService {
+    /// Only verified real-time or completed-market data may be used by automatic valuation.
+    /// Public delayed quotes remain display-only until a user-facing valuation policy exists.
+    pub fn is_usable_for_valuation(status: MarketStatus) -> bool {
+        matches!(status, MarketStatus::Realtime | MarketStatus::Closed)
+    }
+
     pub fn fetch_snapshot<A: MarketDataAdapter + ?Sized>(
         adapter: &A,
         request: &MarketFetchRequest,

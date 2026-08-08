@@ -2,7 +2,7 @@
 
 use std::{error::Error, fmt, fs, path::Path};
 
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use tauri::Manager;
 
 use super::migrations;
@@ -124,6 +124,28 @@ pub struct HoldingUpdate {
     pub average_cost: String,
     pub cost_amount: String,
     pub as_of_date: Option<String>,
+}
+
+/// Read model used by the Portfolio UI service. It retains raw persisted values; all financial
+/// parsing and calculation remain in the Rust Portfolio and Market services.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortfolioHoldingData {
+    pub holding_id: i64,
+    pub security_id: i64,
+    pub name: String,
+    pub symbol: String,
+    pub market: String,
+    pub security_type: String,
+    pub trade_rule: String,
+    pub quantity: i64,
+    pub available_quantity: i64,
+    pub average_cost: String,
+    pub cost_amount: String,
+    pub current_price: Option<String>,
+    pub previous_close: Option<String>,
+    pub change_percent: Option<String>,
+    pub quote_status: Option<String>,
+    pub transaction_status: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -354,6 +376,144 @@ impl DatabaseService {
             .map_err(Into::into)
     }
 
+    pub fn get_or_create_local_holding_account(&self) -> DatabaseResult<CashAccount> {
+        let existing = self.connection.query_row(
+            "SELECT id, name, currency, available_to_buy, withdrawable_cash, pending_settlement FROM cash_accounts WHERE name = '本地持仓账户'",
+            [],
+            |row| Ok(CashAccount {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                currency: row.get(2)?,
+                available_to_buy: row.get(3)?,
+                withdrawable_cash: row.get(4)?,
+                pending_settlement: row.get(5)?,
+            }),
+        );
+        match existing {
+            Ok(account) => Ok(account),
+            Err(rusqlite::Error::QueryReturnedNoRows) => self.create_cash_account(NewCashAccount {
+                name: "本地持仓账户".into(),
+                currency: "CNY".into(),
+                available_to_buy: "0".into(),
+                withdrawable_cash: "0".into(),
+                pending_settlement: "0".into(),
+            }),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub fn find_security_by_symbol_and_market(
+        &self,
+        symbol: &str,
+        market: &str,
+    ) -> DatabaseResult<Option<Security>> {
+        self.connection
+            .query_row(
+                "
+                SELECT id, symbol, name, market, exchange, security_type, industry, concepts_json, trade_rule
+                FROM securities WHERE symbol = ?1 AND market = ?2
+                ",
+                params![symbol, market],
+                |row| {
+                    Ok(Security {
+                        id: row.get(0)?,
+                        symbol: row.get(1)?,
+                        name: row.get(2)?,
+                        market: row.get(3)?,
+                        exchange: row.get(4)?,
+                        security_type: row.get(5)?,
+                        industry: row.get(6)?,
+                        concepts_json: row.get(7)?,
+                        trade_rule: row.get(8)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn update_security_for_portfolio(
+        &self,
+        id: i64,
+        name: &str,
+        security_type: &str,
+        trade_rule: &str,
+    ) -> DatabaseResult<Security> {
+        self.connection.execute(
+            "
+            UPDATE securities
+            SET name = ?1, instrument_type = ?2, security_type = ?2, trading_rule = ?3, trade_rule = ?3,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ?4
+            ",
+            params![name, security_type, trade_rule, id],
+        )?;
+        self.get_security(id)
+    }
+
+    pub fn find_holding_by_account_and_security(
+        &self,
+        cash_account_id: i64,
+        security_id: i64,
+    ) -> DatabaseResult<Option<Holding>> {
+        self.connection
+            .query_row(
+                "
+                SELECT id, cash_account_id, security_id, quantity, available_quantity, average_cost, cost_amount, position_source, as_of_date
+                FROM holdings WHERE cash_account_id = ?1 AND security_id = ?2
+                ",
+                params![cash_account_id, security_id],
+                Self::map_holding,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn list_portfolio_holding_data(&self) -> DatabaseResult<Vec<PortfolioHoldingData>> {
+        let mut statement = self.connection.prepare(
+            "
+            SELECT
+                h.id, s.id, s.name, s.symbol, s.market, s.security_type, s.trade_rule,
+                h.quantity, h.available_quantity, h.average_cost, h.cost_amount,
+                q.current_price, q.previous_close, q.change_pct, q.delay_status,
+                (
+                    SELECT t.status FROM transactions t
+                    WHERE t.cash_account_id = h.cash_account_id AND t.security_id = h.security_id
+                    ORDER BY t.trade_date DESC, t.id DESC LIMIT 1
+                )
+            FROM holdings h
+            JOIN securities s ON s.id = h.security_id
+            LEFT JOIN market_quotes q ON q.id = (
+                SELECT latest_quote.id FROM market_quotes latest_quote
+                WHERE latest_quote.security_id = s.id
+                ORDER BY latest_quote.market_timestamp DESC, latest_quote.id DESC LIMIT 1
+            )
+            ORDER BY s.market, s.symbol
+            ",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(PortfolioHoldingData {
+                holding_id: row.get(0)?,
+                security_id: row.get(1)?,
+                name: row.get(2)?,
+                symbol: row.get(3)?,
+                market: row.get(4)?,
+                security_type: row.get(5)?,
+                trade_rule: row.get(6)?,
+                quantity: row.get(7)?,
+                available_quantity: row.get(8)?,
+                average_cost: row.get(9)?,
+                cost_amount: row.get(10)?,
+                current_price: row.get(11)?,
+                previous_close: row.get(12)?,
+                change_percent: row.get(13)?,
+                quote_status: row.get(14)?,
+                transaction_status: row.get(15)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     fn upsert_market_source(&self, snapshot: &MarketSnapshot) -> DatabaseResult<i64> {
         let (status, last_success_at, last_error) = if snapshot.delay_status == MarketStatus::NoData
         {
@@ -397,7 +557,7 @@ impl DatabaseService {
             .map_err(Into::into)
     }
 
-    fn get_security(&self, id: i64) -> DatabaseResult<Security> {
+    pub fn get_security(&self, id: i64) -> DatabaseResult<Security> {
         self.connection
             .query_row(
                 "
