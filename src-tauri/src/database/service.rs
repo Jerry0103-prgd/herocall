@@ -53,10 +53,11 @@ pub struct Security {
     pub symbol: String,
     pub name: String,
     pub market: String,
-    pub instrument_type: String,
+    pub exchange: String,
+    pub security_type: String,
     pub industry: Option<String>,
     pub concepts_json: String,
-    pub trading_rule: String,
+    pub trade_rule: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,10 +65,11 @@ pub struct NewSecurity {
     pub symbol: String,
     pub name: String,
     pub market: String,
-    pub instrument_type: String,
+    pub exchange: String,
+    pub security_type: String,
     pub industry: Option<String>,
     pub concepts_json: String,
-    pub trading_rule: String,
+    pub trade_rule: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +99,7 @@ pub struct Holding {
     pub quantity: i64,
     pub available_quantity: i64,
     pub average_cost: String,
+    pub cost_amount: String,
     pub position_source: String,
     pub as_of_date: Option<String>,
 }
@@ -108,6 +111,7 @@ pub struct NewHolding {
     pub quantity: i64,
     pub available_quantity: i64,
     pub average_cost: String,
+    pub cost_amount: String,
     pub position_source: String,
     pub as_of_date: Option<String>,
 }
@@ -117,6 +121,7 @@ pub struct HoldingUpdate {
     pub quantity: i64,
     pub available_quantity: i64,
     pub average_cost: String,
+    pub cost_amount: String,
     pub as_of_date: Option<String>,
 }
 
@@ -126,14 +131,16 @@ pub struct Transaction {
     pub cash_account_id: i64,
     pub security_id: i64,
     pub side: String,
+    pub status: String,
     pub record_source: String,
     pub trade_date: String,
     pub quantity: i64,
     pub price: String,
     pub commission: String,
-    pub stamp_duty: String,
+    pub stamp_tax: String,
     pub transfer_fee: String,
     pub other_fee: String,
+    pub minimum_commission: String,
     pub external_reference: Option<String>,
     pub import_batch_id: Option<String>,
     pub note: Option<String>,
@@ -144,14 +151,16 @@ pub struct NewTransaction {
     pub cash_account_id: i64,
     pub security_id: i64,
     pub side: String,
+    pub status: String,
     pub record_source: String,
     pub trade_date: String,
     pub quantity: i64,
     pub price: String,
     pub commission: String,
-    pub stamp_duty: String,
+    pub stamp_tax: String,
     pub transfer_fee: String,
     pub other_fee: String,
+    pub minimum_commission: String,
     pub external_reference: Option<String>,
     pub import_batch_id: Option<String>,
     pub note: Option<String>,
@@ -188,17 +197,22 @@ impl DatabaseService {
     pub fn create_security(&self, input: NewSecurity) -> DatabaseResult<Security> {
         self.connection.execute(
             "
-            INSERT INTO securities (symbol, name, market, instrument_type, industry, concepts_json, trading_rule)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            INSERT INTO securities (
+                symbol, name, market, exchange, instrument_type, security_type,
+                industry, concepts_json, trading_rule, trade_rule
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ",
             params![
                 input.symbol,
                 input.name,
                 input.market,
-                input.instrument_type,
+                input.exchange,
+                input.security_type,
+                input.security_type,
                 input.industry,
                 input.concepts_json,
-                input.trading_rule,
+                input.trade_rule,
+                input.trade_rule,
             ],
         )?;
         self.get_security(self.connection.last_insert_rowid())
@@ -224,8 +238,10 @@ impl DatabaseService {
     pub fn create_holding(&self, input: NewHolding) -> DatabaseResult<Holding> {
         self.connection.execute(
             "
-            INSERT INTO holdings (cash_account_id, security_id, quantity, available_quantity, average_cost, position_source, as_of_date)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            INSERT INTO holdings (
+                cash_account_id, security_id, quantity, available_quantity, average_cost,
+                cost_amount, position_source, as_of_date
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             ",
             params![
                 input.cash_account_id,
@@ -233,6 +249,7 @@ impl DatabaseService {
                 input.quantity,
                 input.available_quantity,
                 input.average_cost,
+                input.cost_amount,
                 input.position_source,
                 input.as_of_date,
             ],
@@ -246,22 +263,26 @@ impl DatabaseService {
         self.connection.execute(
             "
             INSERT INTO transactions (
-                cash_account_id, security_id, side, record_source, trade_date, quantity, price,
-                commission, stamp_duty, transfer_fee, other_fee, external_reference, import_batch_id, note
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                cash_account_id, security_id, side, status, record_source, trade_date, quantity, price,
+                commission, stamp_duty, stamp_tax, transfer_fee, other_fee, minimum_commission,
+                external_reference, import_batch_id, note
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
             ",
             params![
                 input.cash_account_id,
                 input.security_id,
                 input.side,
+                input.status,
                 input.record_source,
                 input.trade_date,
                 input.quantity,
                 input.price,
                 input.commission,
-                input.stamp_duty,
+                input.stamp_tax,
+                input.stamp_tax,
                 input.transfer_fee,
                 input.other_fee,
+                input.minimum_commission,
                 input.external_reference,
                 input.import_batch_id,
                 input.note,
@@ -273,7 +294,7 @@ impl DatabaseService {
     pub fn get_holding(&self, id: i64) -> DatabaseResult<Holding> {
         self.connection.query_row(
             "
-            SELECT id, cash_account_id, security_id, quantity, available_quantity, average_cost, position_source, as_of_date
+            SELECT id, cash_account_id, security_id, quantity, available_quantity, average_cost, cost_amount, position_source, as_of_date
             FROM holdings WHERE id = ?1
             ",
             [id],
@@ -285,14 +306,15 @@ impl DatabaseService {
         self.connection.execute(
             "
             UPDATE holdings
-            SET quantity = ?1, available_quantity = ?2, average_cost = ?3, as_of_date = ?4,
+            SET quantity = ?1, available_quantity = ?2, average_cost = ?3, cost_amount = ?4, as_of_date = ?5,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE id = ?5
+            WHERE id = ?6
             ",
             params![
                 input.quantity,
                 input.available_quantity,
                 input.average_cost,
+                input.cost_amount,
                 input.as_of_date,
                 id,
             ],
@@ -300,10 +322,17 @@ impl DatabaseService {
         self.get_holding(id)
     }
 
-    pub fn delete_transaction(&self, id: i64) -> DatabaseResult<usize> {
-        self.connection
-            .execute("DELETE FROM transactions WHERE id = ?1", [id])
-            .map_err(Into::into)
+    /// Preserves the immutable transaction history while making a record inactive for later rules.
+    pub fn cancel_transaction(&self, id: i64) -> DatabaseResult<Transaction> {
+        self.connection.execute(
+            "
+                UPDATE transactions
+                SET status = 'CANCELLED', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                WHERE id = ?1
+                ",
+            [id],
+        )?;
+        self.get_transaction(id)
     }
 
     pub fn delete_holding(&self, id: i64) -> DatabaseResult<usize> {
@@ -322,7 +351,7 @@ impl DatabaseService {
         self.connection
             .query_row(
                 "
-            SELECT id, symbol, name, market, instrument_type, industry, concepts_json, trading_rule
+            SELECT id, symbol, name, market, exchange, security_type, industry, concepts_json, trade_rule
             FROM securities WHERE id = ?1
             ",
                 [id],
@@ -332,10 +361,11 @@ impl DatabaseService {
                         symbol: row.get(1)?,
                         name: row.get(2)?,
                         market: row.get(3)?,
-                        instrument_type: row.get(4)?,
-                        industry: row.get(5)?,
-                        concepts_json: row.get(6)?,
-                        trading_rule: row.get(7)?,
+                        exchange: row.get(4)?,
+                        security_type: row.get(5)?,
+                        industry: row.get(6)?,
+                        concepts_json: row.get(7)?,
+                        trade_rule: row.get(8)?,
                     })
                 },
             )
@@ -367,8 +397,9 @@ impl DatabaseService {
     fn get_transaction(&self, id: i64) -> DatabaseResult<Transaction> {
         self.connection.query_row(
             "
-            SELECT id, cash_account_id, security_id, side, record_source, trade_date, quantity, price,
-                   commission, stamp_duty, transfer_fee, other_fee, external_reference, import_batch_id, note
+            SELECT id, cash_account_id, security_id, side, status, record_source, trade_date, quantity, price,
+                   commission, stamp_tax, transfer_fee, other_fee, minimum_commission,
+                   external_reference, import_batch_id, note
             FROM transactions WHERE id = ?1
             ",
             [id],
@@ -378,17 +409,19 @@ impl DatabaseService {
                     cash_account_id: row.get(1)?,
                     security_id: row.get(2)?,
                     side: row.get(3)?,
-                    record_source: row.get(4)?,
-                    trade_date: row.get(5)?,
-                    quantity: row.get(6)?,
-                    price: row.get(7)?,
-                    commission: row.get(8)?,
-                    stamp_duty: row.get(9)?,
-                    transfer_fee: row.get(10)?,
-                    other_fee: row.get(11)?,
-                    external_reference: row.get(12)?,
-                    import_batch_id: row.get(13)?,
-                    note: row.get(14)?,
+                    status: row.get(4)?,
+                    record_source: row.get(5)?,
+                    trade_date: row.get(6)?,
+                    quantity: row.get(7)?,
+                    price: row.get(8)?,
+                    commission: row.get(9)?,
+                    stamp_tax: row.get(10)?,
+                    transfer_fee: row.get(11)?,
+                    other_fee: row.get(12)?,
+                    minimum_commission: row.get(13)?,
+                    external_reference: row.get(14)?,
+                    import_batch_id: row.get(15)?,
+                    note: row.get(16)?,
                 })
             },
         ).map_err(Into::into)
@@ -402,8 +435,9 @@ impl DatabaseService {
             quantity: row.get(3)?,
             available_quantity: row.get(4)?,
             average_cost: row.get(5)?,
-            position_source: row.get(6)?,
-            as_of_date: row.get(7)?,
+            cost_amount: row.get(6)?,
+            position_source: row.get(7)?,
+            as_of_date: row.get(8)?,
         })
     }
 }
@@ -417,10 +451,11 @@ mod tests {
             symbol: "600519".into(),
             name: "贵州茅台".into(),
             market: "SSE".into(),
-            instrument_type: "STOCK".into(),
+            exchange: "SSE".into(),
+            security_type: "STOCK".into(),
             industry: Some("白酒".into()),
             concepts_json: "[\"消费\"]".into(),
-            trading_rule: "T_PLUS_ONE".into(),
+            trade_rule: "T_PLUS_1".into(),
         }
     }
 
@@ -456,7 +491,7 @@ mod tests {
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 1);
+        assert_eq!(migration_count, 2);
         assert_eq!(table_count, 7);
     }
 
@@ -480,6 +515,7 @@ mod tests {
                 quantity: 100,
                 available_quantity: 100,
                 average_cost: "1500.00".into(),
+                cost_amount: "150000.00".into(),
                 position_source: "INITIAL_POSITION".into(),
                 as_of_date: Some("2026-08-08".into()),
             })
@@ -490,14 +526,16 @@ mod tests {
                 cash_account_id: cash_account.id,
                 security_id: security.id,
                 side: "BUY".into(),
+                status: "CONFIRMED".into(),
                 record_source: "MANUAL".into(),
                 trade_date: "2026-08-08".into(),
                 quantity: 100,
                 price: "1500.00".into(),
                 commission: "5.00".into(),
-                stamp_duty: "0".into(),
+                stamp_tax: "0".into(),
                 transfer_fee: "0".into(),
                 other_fee: "0".into(),
+                minimum_commission: "5.00".into(),
                 external_reference: None,
                 import_batch_id: None,
                 note: Some("CRUD test record".into()),
@@ -515,28 +553,110 @@ mod tests {
                     quantity: 200,
                     available_quantity: 100,
                     average_cost: "1550.00".into(),
+                    cost_amount: "310000.00".into(),
                     as_of_date: Some("2026-08-09".into()),
                 },
             )
             .expect("update holding");
         assert_eq!(updated.quantity, 200);
         assert_eq!(updated.average_cost, "1550.00");
+        assert_eq!(updated.cost_amount, "310000.00");
 
-        assert_eq!(
-            database
-                .delete_transaction(transaction.id)
-                .expect("delete transaction"),
-            1
-        );
+        let cancelled = database
+            .cancel_transaction(transaction.id)
+            .expect("cancel transaction");
+        assert_eq!(cancelled.status, "CANCELLED");
         assert_eq!(
             database.delete_holding(holding.id).expect("delete holding"),
             1
         );
+    }
+
+    #[test]
+    fn migration_002_upgrades_001_without_losing_existing_records() {
+        let mut connection = Connection::open_in_memory().expect("create legacy database");
+        migrations::apply_001_for_upgrade_test(&mut connection).expect("apply 001 only");
+
+        connection
+            .execute(
+                "
+                INSERT INTO securities (symbol, name, market, instrument_type, concepts_json, trading_rule)
+                VALUES ('510300', '沪深300ETF', 'SSE', 'ETF', '[]', 'T_PLUS_ZERO')
+                ",
+                [],
+            )
+            .expect("insert legacy security");
+        let security_id = connection.last_insert_rowid();
+        connection
+            .execute("INSERT INTO cash_accounts (name) VALUES ('旧账户')", [])
+            .expect("insert legacy account");
+        let cash_account_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                "
+                INSERT INTO holdings (cash_account_id, security_id, quantity, available_quantity, average_cost)
+                VALUES (?1, ?2, 100, 100, '3.85')
+                ",
+                [cash_account_id, security_id],
+            )
+            .expect("insert legacy holding");
+        connection
+            .execute(
+                "
+                INSERT INTO transactions (
+                    cash_account_id, security_id, side, trade_date, quantity, price, commission, stamp_duty
+                ) VALUES (?1, ?2, 'BUY', '2026-08-08', 100, '3.85', '5.00', '0.10')
+                ",
+                [cash_account_id, security_id],
+            )
+            .expect("insert legacy transaction");
+
+        migrations::apply(&mut connection).expect("upgrade database through 002");
+
+        let migration_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .expect("read migration count");
+        let upgraded_security: (String, String, String) = connection
+            .query_row(
+                "SELECT exchange, security_type, trade_rule FROM securities WHERE id = ?1",
+                [security_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read upgraded security");
+        let upgraded_holding: (i64, String, String) = connection
+            .query_row(
+                "SELECT quantity, average_cost, cost_amount FROM holdings WHERE security_id = ?1",
+                [security_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read upgraded holding");
+        let upgraded_transaction: (String, String, String, String) = connection
+            .query_row(
+                "SELECT side, status, stamp_tax, minimum_commission FROM transactions WHERE security_id = ?1",
+                [security_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("read upgraded transaction");
+        let corporate_actions_exists: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'corporate_actions'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("verify corporate action table");
+
+        assert_eq!(migration_count, 2);
         assert_eq!(
-            database
-                .delete_security(security.id)
-                .expect("delete security"),
-            1
+            upgraded_security,
+            ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
         );
+        assert_eq!(upgraded_holding, (100, "3.85".into(), "0".into()));
+        assert_eq!(
+            upgraded_transaction,
+            ("BUY".into(), "CONFIRMED".into(), "0.10".into(), "0".into())
+        );
+        assert_eq!(corporate_actions_exists, 1);
     }
 }
