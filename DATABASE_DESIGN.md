@@ -1,6 +1,6 @@
 # 数据库设计（逻辑模型）
 
-本文件描述 SQLite 逻辑模型与 V0.7 已落地的数据库核心。迁移由 Rust 服务层版本化管理；所有时间字段使用 ISO 8601 UTC，交易日期字段以 `Asia/Shanghai` 解释。
+本文件描述 SQLite 逻辑模型与 V0.8 已落地的数据库核心。迁移由 Rust 服务层版本化管理；所有时间字段使用 ISO 8601 UTC，交易日期字段以 `Asia/Shanghai` 解释。
 
 ## 1. 建模原则
 
@@ -24,8 +24,9 @@
 | `news_articles` | `id`, `title`, `source`, `source_type`, `published_at`, `fetch_time`, `summary`, `url`, `related_security_id`, `created_at` | 已保存资讯的可追溯记录；来源类型仅为 `OFFICIAL`、`MEDIA`、`COMMUNITY`，社区内容必须作为观点展示；可关联一只证券 |
 | `daily_reviews` | `id`, `review_date`, `snapshot_id`, `portfolio_summary`, `market_summary`, `holding_summary`, `risk_summary`, `created_at` | 非 AI 的每日结构化复盘；四个摘要字段保存类型化 JSON，`snapshot_id` 可为空以明确当日市场快照未确认 |
 | `ai_reviews` | `id`, `review_id`, `model`, `prompt_version`, `facts`, `inferences`, `risks`, `created_at` | 对已保存每日复盘的 AI 辅助解释；三段内容保存为 JSON 字符串，必须经结构与禁止词校验后才可落库 |
+| `events` | `id`, `event_type`, `title`, `security_id`, `event_time`, `timezone`, `source`, `source_url`, `status`, `created_at` | 投资事件日历；支持财报、分红、除权除息、股东大会、宏观数据和美联储会议，保留来源、原始带时区时间及确认状态 |
 
-`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）、`002`（金融领域字段补充）、`003`（行情标准字段）、`004`（资讯存储）、`005`（每日复盘）和 `006`（AI 复盘）；迁移重复执行不会重新建表，已应用迁移的校验标识不匹配会阻止继续启动。
+`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）、`002`（金融领域字段补充）、`003`（行情标准字段）、`004`（资讯存储）、`005`（每日复盘）、`006`（AI 复盘）和 `007`（事件日历）；迁移重复执行不会重新建表，已应用迁移的校验标识不匹配会阻止继续启动。
 
 ## 3. 延后实现的逻辑实体
 
@@ -42,6 +43,7 @@
 - `news_articles` 强制要求标题、来源、来源类型、发布时间、抓取时间、摘要和 HTTP(S) 原文地址；原文地址唯一，关联证券删除时仅清除关联而保留资讯审计记录。按发布时间及关联证券建立索引，持仓页查询只返回存在当前持仓关联的记录。
 - `daily_reviews.review_date` 唯一；同一日期重新生成时原子更新四个摘要和关联快照，绝不生成第二条同日复盘。快照删除时复盘保留但 `snapshot_id` 设为空，以保留生成时的结构化事实和“未确认”状态。
 - `ai_reviews` 使用外键关联 `daily_reviews`，每日复盘删除时其 AI 辅助解释一并删除。保留模型名、提示词版本和生成时间以支持审计；运行时 API Key 不进入此表或其他 SQLite 表。
+- `events.event_type` 仅允许 `EARNINGS`、`DIVIDEND`、`EX_DIVIDEND`、`SHAREHOLDER_MEETING`、`MACRO_DATA`、`FED_MEETING`；`status` 仅允许 `CONFIRMED`、`UNCONFIRMED`、`ARCHIVED`。`security_id` 可为空以支持宏观/FED 事件；证券删除时只清除关联、保留事件。查询先标识当前持仓关联事件，再按解析后的原始带时区时间排序，不推断日期或状态。
 
 ## 5. 派生计算（后续阶段）
 

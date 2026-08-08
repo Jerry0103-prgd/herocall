@@ -198,6 +198,52 @@ pub struct NewAiReview {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventRecord {
+    pub id: i64,
+    pub event_type: String,
+    pub title: String,
+    pub security_id: Option<i64>,
+    pub event_time: String,
+    pub timezone: String,
+    pub source: String,
+    pub source_url: Option<String>,
+    pub status: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewEventRecord {
+    pub event_type: String,
+    pub title: String,
+    pub security_id: Option<i64>,
+    pub event_time: String,
+    pub timezone: String,
+    pub source: String,
+    pub source_url: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventRecordUpdate {
+    pub event_type: String,
+    pub title: String,
+    pub security_id: Option<i64>,
+    pub event_time: String,
+    pub timezone: String,
+    pub source: String,
+    pub source_url: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventWithSecurity {
+    pub event: EventRecord,
+    pub security_name: Option<String>,
+    pub security_symbol: Option<String>,
+    pub holding_related: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Holding {
     pub id: i64,
     pub cash_account_id: i64,
@@ -434,6 +480,70 @@ impl DatabaseService {
         self.get_ai_review(self.connection.last_insert_rowid())
     }
 
+    pub fn create_event(&self, input: NewEventRecord) -> DatabaseResult<EventRecord> {
+        self.connection.execute(
+            "
+            INSERT INTO events (
+                event_type, title, security_id, event_time, timezone, source, source_url, status
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ",
+            params![
+                input.event_type,
+                input.title,
+                input.security_id,
+                input.event_time,
+                input.timezone,
+                input.source,
+                input.source_url,
+                input.status,
+            ],
+        )?;
+        self.get_event(self.connection.last_insert_rowid())
+    }
+
+    pub fn get_event(&self, id: i64) -> DatabaseResult<EventRecord> {
+        self.connection
+            .query_row(
+                "
+                SELECT id, event_type, title, security_id, event_time, timezone, source, source_url,
+                       status, created_at
+                FROM events WHERE id = ?1
+                ",
+                [id],
+                Self::map_event,
+            )
+            .map_err(Into::into)
+    }
+
+    pub fn update_event(&self, id: i64, input: EventRecordUpdate) -> DatabaseResult<EventRecord> {
+        self.connection.execute(
+            "
+            UPDATE events
+            SET event_type = ?1, title = ?2, security_id = ?3, event_time = ?4, timezone = ?5,
+                source = ?6, source_url = ?7, status = ?8
+            WHERE id = ?9
+            ",
+            params![
+                input.event_type,
+                input.title,
+                input.security_id,
+                input.event_time,
+                input.timezone,
+                input.source,
+                input.source_url,
+                input.status,
+                id,
+            ],
+        )?;
+        self.get_event(id)
+    }
+
+    pub fn delete_event(&self, id: i64) -> DatabaseResult<usize> {
+        self.connection
+            .execute("DELETE FROM events WHERE id = ?1", [id])
+            .map_err(Into::into)
+    }
+
     pub fn get_ai_review(&self, id: i64) -> DatabaseResult<AiReview> {
         self.connection
             .query_row(
@@ -464,6 +574,29 @@ impl DatabaseService {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    pub fn list_events(&self) -> DatabaseResult<Vec<EventWithSecurity>> {
+        let mut statement = self.connection.prepare(
+            "
+            SELECT e.id, e.event_type, e.title, e.security_id, e.event_time, e.timezone, e.source,
+                   e.source_url, e.status, e.created_at, s.name, s.symbol,
+                   CASE WHEN e.security_id IS NOT NULL AND EXISTS (
+                       SELECT 1 FROM holdings h WHERE h.security_id = e.security_id
+                   ) THEN 1 ELSE 0 END
+            FROM events e
+            LEFT JOIN securities s ON s.id = e.security_id
+            ",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(EventWithSecurity {
+                event: Self::map_event(row)?,
+                security_name: row.get(10)?,
+                security_symbol: row.get(11)?,
+                holding_related: row.get::<_, i64>(12)? == 1,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn get_daily_review_by_date(&self, review_date: &str) -> DatabaseResult<DailyReview> {
@@ -1009,6 +1142,21 @@ impl DatabaseService {
         })
     }
 
+    fn map_event(row: &Row<'_>) -> rusqlite::Result<EventRecord> {
+        Ok(EventRecord {
+            id: row.get(0)?,
+            event_type: row.get(1)?,
+            title: row.get(2)?,
+            security_id: row.get(3)?,
+            event_time: row.get(4)?,
+            timezone: row.get(5)?,
+            source: row.get(6)?,
+            source_url: row.get(7)?,
+            status: row.get(8)?,
+            created_at: row.get(9)?,
+        })
+    }
+
     fn list_news_articles_by_scope(
         &self,
         scope: &str,
@@ -1237,15 +1385,15 @@ mod tests {
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN (
                     'securities', 'holdings', 'transactions', 'cash_accounts',
                     'market_snapshots', 'market_quotes', 'data_sources', 'news_articles',
-                    'daily_reviews', 'ai_reviews'
+                    'daily_reviews', 'ai_reviews', 'events'
                 )",
                 [],
                 |row| row.get(0),
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 6);
-        assert_eq!(table_count, 10);
+        assert_eq!(migration_count, 7);
+        assert_eq!(table_count, 11);
     }
 
     #[test]
@@ -1420,8 +1568,15 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("verify AI review table");
+        let events_exists: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'events'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("verify event table");
 
-        assert_eq!(migration_count, 6);
+        assert_eq!(migration_count, 7);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -1435,6 +1590,7 @@ mod tests {
         assert_eq!(news_articles_exists, 1);
         assert_eq!(daily_reviews_exists, 1);
         assert_eq!(ai_reviews_exists, 1);
+        assert_eq!(events_exists, 1);
     }
 
     #[test]

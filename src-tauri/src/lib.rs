@@ -3,6 +3,9 @@
 mod ai_service;
 mod dashboard_service;
 mod database;
+#[allow(dead_code)]
+// Phase 6-D defines the future Adapter ingestion/CRUD API; calendar UI is read-only.
+mod event_service;
 pub mod market_service;
 #[allow(dead_code)] // Phase 6-A defines the future Adapter ingestion/CRUD API; UI is read-only.
 mod news_service;
@@ -13,6 +16,7 @@ mod settings_service;
 
 use ai_service::{AiReviewView, AiService, AiServiceStatusView};
 use dashboard_service::{AssetSummaryView, DashboardService, MarketIndexQuoteView};
+use event_service::{EventService, EventView};
 use news_service::{NewsArticleView, NewsService};
 use portfolio_ui_service::{
     CreateHoldingInput, PortfolioHoldingView, PortfolioUiService, UpdateHoldingInput,
@@ -147,6 +151,16 @@ fn generate_ai_review(app: tauri::AppHandle, review_date: String) -> Result<AiRe
     AiService::generate_from_runtime(&database, &review_date).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn get_calendar_events(
+    app: tauri::AppHandle,
+    status: Option<String>,
+) -> Result<Vec<EventView>, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    EventService::list(&database, status.as_deref()).map_err(|error| error.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -170,7 +184,8 @@ pub fn run() {
             generate_daily_review,
             get_ai_service_status,
             get_latest_ai_review,
-            generate_ai_review
+            generate_ai_review,
+            get_calendar_events
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AStock AI Workbench");

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Sidebar, type PageId } from "./components/Sidebar";
 import { ComingSoonPage } from "./pages/ComingSoonPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { EventCalendarPage } from "./pages/EventCalendarPage";
 import { NewsPage } from "./pages/NewsPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { ReviewPage } from "./pages/ReviewPage";
@@ -26,8 +27,9 @@ function App() {
       {activePage === "news" ? <NewsPage /> : null}
       {activePage === "review" ? <ReviewPage /> : null}
       {activePage === "holdings" ? <PortfolioPage /> : null}
+      {activePage === "calendar" ? <EventCalendarPage /> : null}
       {activePage === "settings" ? <SettingsPage /> : null}
-      {activePage !== "dashboard" && activePage !== "news" && activePage !== "review" && activePage !== "holdings" && activePage !== "settings" ? <ComingSoonPage title={pageTitles[activePage]} /> : null}
+      {activePage !== "dashboard" && activePage !== "news" && activePage !== "review" && activePage !== "holdings" && activePage !== "calendar" && activePage !== "settings" ? <ComingSoonPage title={pageTitles[activePage]} /> : null}
     </main>
   );
 }
