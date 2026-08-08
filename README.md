@@ -52,6 +52,8 @@ npm install
 npm run tauri dev
 ```
 
+发布构建和 Windows CI 说明见 [RELEASE_BUILD.md](docs/RELEASE_BUILD.md)。
+
 ## 当前工程结构
 
 ```text
