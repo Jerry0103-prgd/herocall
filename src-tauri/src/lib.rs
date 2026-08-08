@@ -1,9 +1,14 @@
 //! Desktop application bootstrap.
-//! The SQLite plugin is registered here only; V1.0 business tables are intentionally absent.
+
+mod database;
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_sql::Builder::default().build())
+        .setup(|app| {
+            database::service::DatabaseService::initialize_app_database(&app.handle())
+                .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)?;
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("failed to run AStock AI Workbench");
 }

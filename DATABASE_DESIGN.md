@@ -1,6 +1,6 @@
 # 数据库设计（逻辑模型）
 
-本文件描述拟采用 SQLite 的逻辑模型，不代表当前阶段已创建数据库或迁移脚本。所有时间字段使用 ISO 8601 UTC；交易日相关规则同时保存 `trading_date`（`Asia/Shanghai`）。
+本文件描述 SQLite 逻辑模型与 V0.2 已落地的数据库核心。迁移由 Rust 服务层版本化管理；所有时间字段使用 ISO 8601 UTC，交易日期字段以 `Asia/Shanghai` 解释。
 
 ## 1. 建模原则
 
@@ -9,33 +9,33 @@
 - 金额、价格、数量存为 decimal 文本或定点整数及其 scale，禁止以浮点数作为权威核算值。
 - 外键、唯一索引和事务保障关联完整性；数据迁移版本化。
 
-## 2. 核心实体
+## 2. V0.2 已实现核心实体
 
 | 表 | 主要字段 | 说明 |
 | --- | --- | --- |
-| `accounts` | `id`, `name`, `currency`, `cash_balance`, `created_at` | 本地资产账户；不含券商授权 |
-| `instruments` | `id`, `symbol`, `name`, `market`, `instrument_type`, `industry`, `concepts_json` | 股票、指数或 ETF；`symbol + market` 唯一 |
-| `trade_records` | `id`, `account_id`, `instrument_id`, `side`, `trade_date`, `quantity`, `price`, `fees`, `created_at` | 用户手工买入/卖出记录，`side` 为 BUY/SELL |
-| `position_lots` | `id`, `buy_trade_id`, `account_id`, `instrument_id`, `acquired_date`, `original_quantity`, `remaining_quantity` | 用于 T+1 可卖数与先进先出/指定成本规则的可审计计算 |
-| `position_snapshots` | `id`, `account_id`, `instrument_id`, `as_of`, `quantity`, `cost_basis`, `market_value`, `unrealized_pnl` | 可重建的查询快照，标记计算版本 |
-| `market_quotes` | `id`, `instrument_id`, `price`, `change_pct`, `market_timestamp`, `fetched_at`, `source`, `delay_status` | 股票、指数、ETF 行情；需包含数据质量元数据 |
-| `sources` | `id`, `name`, `source_type`, `base_url`, `trust_level`, `enabled` | 数据源登记；不保存 API Key |
-| `information_items` | `id`, `source_id`, `kind`, `title`, `published_at`, `fetched_at`, `url`, `content_hash`, `community_opinion` | 新闻、公告、社区内容；社区项 `community_opinion=true` |
-| `information_instruments` | `information_id`, `instrument_id`, `relation_type` | 资讯与证券多对多关联 |
-| `calendar_events` | `id`, `instrument_id?`, `event_type`, `event_date`, `title`, `status`, `source_id`, `source_url`, `confirmed_at` | 公司/宏观事件；无确认时状态为 UNCONFIRMED |
-| `daily_reviews` | `id`, `review_date`, `facts_md`, `inferences_md`, `risks_md`, `evidence_json`, `model_info`, `created_at` | AI 复盘和可追溯证据 |
-| `review_notes` | `id`, `review_id`, `content`, `created_at`, `updated_at` | 用户个人复盘笔记 |
+| `securities` | `id`, `symbol`, `name`, `market`, `instrument_type`, `industry`, `concepts_json`, `trading_rule` | A 股普通股票与 ETF；`symbol + market` 唯一 |
+| `cash_accounts` | `id`, `name`, `currency`, `available_to_buy`, `withdrawable_cash`, `pending_settlement` | 本地现金账户；不含券商授权 |
+| `holdings` | `id`, `cash_account_id`, `security_id`, `quantity`, `available_quantity`, `average_cost`, `position_source` | 当前持仓存储；本阶段不自动计算成本、可卖数或盈亏 |
+| `transactions` | `id`, `cash_account_id`, `security_id`, `side`, `trade_date`, `quantity`, `price`, `commission`, `stamp_duty`, `transfer_fee`, `other_fee` | 完整手工/导入/期初交易流水；费用独立保存 |
+| `data_sources` | `id`, `name`, `source_type`, `priority`, `base_url`, `status`, `enabled` | 数据源登记与状态；不保存 API Key |
+| `market_snapshots` | `id`, `data_source_id`, `market_timestamp`, `fetched_at`, `delay_status` | 行情抓取批次元数据；当前不接入数据源 |
+| `market_quotes` | `id`, `market_snapshot_id`, `security_id`, `data_source_id`, `current_price`, `change_pct`, `market_timestamp`, `fetched_at`, `delay_status` | 单条行情及完整来源/时间/延迟元数据；当前不刷新行情 |
 
-## 3. 关键约束与索引
+`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。迁移重复执行不会重新建表；已应用迁移的校验标识不匹配会阻止继续启动。
 
-- `trade_records.quantity > 0`、`price >= 0`、`fees >= 0`；卖出在写入事务中校验截至该交易日的可卖数量。
-- 当日买入的 `position_lots` 不计入同一 `trade_date` 的可卖数量，满足 A 股 T+1。
-- `market_quotes` 必填 `source`、`market_timestamp`、`fetched_at`、`delay_status`；按 `(instrument_id, market_timestamp, source)` 去重或保留版本。
-- `information_items` 对 `(source_id, url)` 或 `(source_id, content_hash)` 建唯一约束；来源不可确认时不得入库为事实资讯。
-- 为 `trade_records(account_id, instrument_id, trade_date)`、`market_quotes(instrument_id, market_timestamp DESC)`、`calendar_events(event_date)`、`information_instruments(instrument_id)` 建索引。
-- `daily_reviews` 必须同时保留事实、推断、风险三个字段；`evidence_json` 仅引用已保存的行情、资讯或事件记录。
+## 3. 延后实现的逻辑实体
 
-## 4. 派生计算
+`position_lots`、资讯、事件日历和 AI 复盘相关表保留在后续阶段实现。本阶段没有创建这些表，也没有实现自动交易、金融计算、行情刷新或外部数据接入。
+
+## 4. 关键约束与索引
+
+- `securities` 的 `(symbol, market)` 唯一；证券类型仅允许 `STOCK` 或 `ETF`。
+- `holdings` 的 `(cash_account_id, security_id)` 唯一，且 `available_quantity` 不可超过持仓数量。
+- `transactions` 保留独立费用字段并以 `(cash_account_id, security_id, trade_date)` 建索引；本阶段只校验结构完整性，不执行成本、可卖数、T+1 或盈亏规则。
+- `market_quotes` 必填 `data_source_id`、`market_timestamp`、`fetched_at`、`delay_status`，并以 `(security_id, data_source_id, market_timestamp)` 去重；没有任何模拟或硬编码行情写入逻辑。
+- `market_snapshots` 与 `market_quotes` 分别按来源和证券时间建立索引，支持后续可追溯查询。
+
+## 5. 派生计算（后续阶段）
 
 - **可卖数量：** 截至交易日、尚未卖出的买入 lot 数量之和，排除当日新建 lot。
 - **已实现盈亏：** 已卖出 lot 的卖出净额减去对应成本和费用；成本分配规则需固定并版本化（建议 FIFO）。

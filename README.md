@@ -6,7 +6,7 @@
 
 ## 当前状态
 
-项目已完成基础工程初始化：包含 Tauri 2、React、TypeScript、Rust 和 SQLite 插件连接框架。当前只提供初始化状态窗口，不包含金融业务、行情接口、股票数据、AI 功能或 SQLite 业务表。
+项目已完成基础工程初始化与数据库核心：包含 Tauri 2、React、TypeScript、Rust，以及由 Rust 服务层管理的 SQLite 迁移框架和核心表。当前不包含 UI 业务页面、行情接口、股票数据或 AI 功能；成本、盈亏、T+1 与行情刷新尚未实现。
 
 ## 产品边界
 
@@ -56,8 +56,8 @@ npm run tauri dev
 
 ```text
 frontend/    React + TypeScript + Vite
-src-tauri/   Tauri 2 + Rust + SQLite 插件连接框架
-database/    未来 SQLite 数据文件的位置（当前无数据库、无业务表）
+src-tauri/   Tauri 2 + Rust + SQLite 迁移与数据库服务层
+database/    本地 SQLite 数据文件的位置（由应用运行时创建，已忽略）
 docs/        后续集中存放扩展文档
 tests/       后续测试目录
 ```
