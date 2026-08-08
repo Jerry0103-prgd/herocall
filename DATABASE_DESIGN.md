@@ -1,6 +1,6 @@
 # 数据库设计（逻辑模型）
 
-本文件描述 SQLite 逻辑模型与 V0.4 已落地的数据库核心。迁移由 Rust 服务层版本化管理；所有时间字段使用 ISO 8601 UTC，交易日期字段以 `Asia/Shanghai` 解释。
+本文件描述 SQLite 逻辑模型与 V0.6 已落地的数据库核心。迁移由 Rust 服务层版本化管理；所有时间字段使用 ISO 8601 UTC，交易日期字段以 `Asia/Shanghai` 解释。
 
 ## 1. 建模原则
 
@@ -21,12 +21,13 @@
 | `market_snapshots` | `id`, `data_source_id`, `market_timestamp`, `fetched_at`, `delay_status` | 已验证行情抓取批次元数据；无可靠行情时仅保存数据源 `NO_DATA` 状态，不伪造行情时间 |
 | `market_quotes` | `id`, `market_snapshot_id`, `security_id`, `symbol`, `security_name`, `market`, `current_price`, `previous_close`, `price_change`, `change_pct`, `volume`, `turnover_amount`, `market_timestamp`, `fetched_at`, `source`, `delay_status` | 单条规范化行情及完整来源/时间/延迟元数据；成交量与成交额同时保存供应商声明单位 |
 | `corporate_actions` | `id`, `security_id`, `action_type`, `announcement_date`, `effective_date`, `data_source_id`, `source_url`, `details_json`, `status` | 公司行动预留；支持 `DIVIDEND`、`SPLIT`、`EX_RIGHT` 的公告/事件记录，不自动调整持仓 |
+| `news_articles` | `id`, `title`, `source`, `source_type`, `published_at`, `fetch_time`, `summary`, `url`, `related_security_id`, `created_at` | 已保存资讯的可追溯记录；来源类型仅为 `OFFICIAL`、`MEDIA`、`COMMUNITY`，社区内容必须作为观点展示；可关联一只证券 |
 
-`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）、`002`（金融领域字段补充）和 `003`（行情标准字段）；迁移重复执行不会重新建表，已应用迁移的校验标识不匹配会阻止继续启动。
+`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）、`002`（金融领域字段补充）、`003`（行情标准字段）和 `004`（资讯存储）；迁移重复执行不会重新建表，已应用迁移的校验标识不匹配会阻止继续启动。
 
 ## 3. 延后实现的逻辑实体
 
-`position_lots`、资讯、事件日历和 AI 复盘相关表保留在后续阶段实现。本阶段没有创建这些表，也没有实现自动交易、资讯/AI 功能、行情调度或 UI 展示；行情 Adapter 仅在被后续应用服务调用时获取并保存可追溯快照。
+`position_lots`、事件日历和 AI 复盘相关表保留在后续阶段实现。资讯已具备本地存储、持仓关联查询和 Adapter 契约，但尚未接入任何外部资讯源，也不会写入演示或虚构资讯；行情 Adapter 同样仅在被后续应用服务调用时获取并保存可追溯快照。
 
 ## 4. 关键约束与索引
 
@@ -36,6 +37,7 @@
 - `corporate_actions.action_type` 仅允许分红、送转/拆分、除权除息三类预留值；本阶段不基于该表修改持仓、成本或交易流水。
 - `market_quotes` 必填 `data_source_id`、`market_timestamp`、`fetched_at`、`delay_status`、`source`，并以 `(security_id, data_source_id, market_timestamp)` 去重；没有任何模拟或硬编码行情写入逻辑。
 - `market_snapshots` 与 `market_quotes` 分别按来源和证券时间建立索引，支持后续可追溯查询。
+- `news_articles` 强制要求标题、来源、来源类型、发布时间、抓取时间、摘要和 HTTP(S) 原文地址；原文地址唯一，关联证券删除时仅清除关联而保留资讯审计记录。按发布时间及关联证券建立索引，持仓页查询只返回存在当前持仓关联的记录。
 
 ## 5. 派生计算（后续阶段）
 

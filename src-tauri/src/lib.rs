@@ -3,11 +3,14 @@
 mod dashboard_service;
 mod database;
 pub mod market_service;
+#[allow(dead_code)] // Phase 6-A defines the future Adapter ingestion/CRUD API; UI is read-only.
+mod news_service;
 pub mod portfolio_service;
 mod portfolio_ui_service;
 mod settings_service;
 
 use dashboard_service::{AssetSummaryView, DashboardService, MarketIndexQuoteView};
+use news_service::{NewsArticleView, NewsService};
 use portfolio_ui_service::{
     CreateHoldingInput, PortfolioHoldingView, PortfolioUiService, UpdateHoldingInput,
 };
@@ -94,6 +97,13 @@ fn create_database_backup(app: tauri::AppHandle) -> Result<BackupView, String> {
     SettingsService::create_backup(&app, &database).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn get_holding_news_articles(app: tauri::AppHandle) -> Result<Vec<NewsArticleView>, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    NewsService::list_for_holdings(&database).map_err(|error| error.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -111,7 +121,8 @@ pub fn run() {
             get_settings_status,
             get_cash_accounts,
             create_cash_account,
-            create_database_backup
+            create_database_backup,
+            get_holding_news_articles
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AStock AI Workbench");

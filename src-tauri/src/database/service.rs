@@ -100,6 +100,51 @@ pub struct MarketSourceStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewsArticle {
+    pub id: i64,
+    pub title: String,
+    pub source: String,
+    pub source_type: String,
+    pub published_at: String,
+    pub fetch_time: String,
+    pub summary: String,
+    pub url: String,
+    pub related_security_id: Option<i64>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewNewsArticle {
+    pub title: String,
+    pub source: String,
+    pub source_type: String,
+    pub published_at: String,
+    pub fetch_time: String,
+    pub summary: String,
+    pub url: String,
+    pub related_security_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewsArticleUpdate {
+    pub title: String,
+    pub source: String,
+    pub source_type: String,
+    pub published_at: String,
+    pub fetch_time: String,
+    pub summary: String,
+    pub url: String,
+    pub related_security_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewsArticleWithSecurity {
+    pub article: NewsArticle,
+    pub related_security_name: Option<String>,
+    pub related_security_symbol: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Holding {
     pub id: i64,
     pub cash_account_id: i64,
@@ -269,6 +314,88 @@ impl DatabaseService {
             ],
         )?;
         self.get_cash_account(self.connection.last_insert_rowid())
+    }
+
+    pub fn create_news_article(&self, input: NewNewsArticle) -> DatabaseResult<NewsArticle> {
+        self.connection.execute(
+            "
+            INSERT INTO news_articles (
+                title, source, source_type, published_at, fetch_time, summary, url, related_security_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ",
+            params![
+                input.title,
+                input.source,
+                input.source_type,
+                input.published_at,
+                input.fetch_time,
+                input.summary,
+                input.url,
+                input.related_security_id,
+            ],
+        )?;
+        self.get_news_article(self.connection.last_insert_rowid())
+    }
+
+    pub fn get_news_article(&self, id: i64) -> DatabaseResult<NewsArticle> {
+        self.connection
+            .query_row(
+                "
+                SELECT id, title, source, source_type, published_at, fetch_time, summary, url,
+                       related_security_id, created_at
+                FROM news_articles WHERE id = ?1
+                ",
+                [id],
+                Self::map_news_article,
+            )
+            .map_err(Into::into)
+    }
+
+    pub fn update_news_article(
+        &self,
+        id: i64,
+        input: NewsArticleUpdate,
+    ) -> DatabaseResult<NewsArticle> {
+        self.connection.execute(
+            "
+            UPDATE news_articles
+            SET title = ?1, source = ?2, source_type = ?3, published_at = ?4, fetch_time = ?5,
+                summary = ?6, url = ?7, related_security_id = ?8
+            WHERE id = ?9
+            ",
+            params![
+                input.title,
+                input.source,
+                input.source_type,
+                input.published_at,
+                input.fetch_time,
+                input.summary,
+                input.url,
+                input.related_security_id,
+                id,
+            ],
+        )?;
+        self.get_news_article(id)
+    }
+
+    pub fn delete_news_article(&self, id: i64) -> DatabaseResult<usize> {
+        self.connection
+            .execute("DELETE FROM news_articles WHERE id = ?1", [id])
+            .map_err(Into::into)
+    }
+
+    pub fn list_news_articles(&self) -> DatabaseResult<Vec<NewsArticleWithSecurity>> {
+        self.list_news_articles_by_scope("")
+    }
+
+    pub fn list_news_articles_for_holdings(&self) -> DatabaseResult<Vec<NewsArticleWithSecurity>> {
+        self.list_news_articles_by_scope(
+            "
+            WHERE EXISTS (
+                SELECT 1 FROM holdings h WHERE h.security_id = n.related_security_id
+            )
+            ",
+        )
     }
 
     pub fn list_cash_accounts(&self) -> DatabaseResult<Vec<CashAccount>> {
@@ -684,6 +811,46 @@ impl DatabaseService {
             .map_err(Into::into)
     }
 
+    fn list_news_articles_by_scope(
+        &self,
+        scope: &str,
+    ) -> DatabaseResult<Vec<NewsArticleWithSecurity>> {
+        let query = format!(
+            "
+            SELECT n.id, n.title, n.source, n.source_type, n.published_at, n.fetch_time, n.summary,
+                   n.url, n.related_security_id, n.created_at, s.name, s.symbol
+            FROM news_articles n
+            LEFT JOIN securities s ON s.id = n.related_security_id
+            {scope}
+            ORDER BY n.published_at DESC, n.id DESC
+            "
+        );
+        let mut statement = self.connection.prepare(&query)?;
+        let rows = statement.query_map([], |row| {
+            Ok(NewsArticleWithSecurity {
+                article: Self::map_news_article(row)?,
+                related_security_name: row.get(10)?,
+                related_security_symbol: row.get(11)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    fn map_news_article(row: &Row<'_>) -> rusqlite::Result<NewsArticle> {
+        Ok(NewsArticle {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            source: row.get(2)?,
+            source_type: row.get(3)?,
+            published_at: row.get(4)?,
+            fetch_time: row.get(5)?,
+            summary: row.get(6)?,
+            url: row.get(7)?,
+            related_security_id: row.get(8)?,
+            created_at: row.get(9)?,
+        })
+    }
+
     fn get_transaction(&self, id: i64) -> DatabaseResult<Transaction> {
         self.connection.query_row(
             "
@@ -871,15 +1038,15 @@ mod tests {
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN (
                     'securities', 'holdings', 'transactions', 'cash_accounts',
-                    'market_snapshots', 'market_quotes', 'data_sources'
+                    'market_snapshots', 'market_quotes', 'data_sources', 'news_articles'
                 )",
                 [],
                 |row| row.get(0),
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 3);
-        assert_eq!(table_count, 7);
+        assert_eq!(migration_count, 4);
+        assert_eq!(table_count, 8);
     }
 
     #[test]
@@ -998,7 +1165,7 @@ mod tests {
             )
             .expect("insert legacy transaction");
 
-        migrations::apply(&mut connection).expect("upgrade database through 003");
+        migrations::apply(&mut connection).expect("upgrade database through 004");
 
         let migration_count: i64 = connection
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
@@ -1033,8 +1200,15 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("verify corporate action table");
+        let news_articles_exists: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'news_articles'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("verify news table");
 
-        assert_eq!(migration_count, 3);
+        assert_eq!(migration_count, 4);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -1045,6 +1219,7 @@ mod tests {
             ("BUY".into(), "CONFIRMED".into(), "0.10".into(), "0".into())
         );
         assert_eq!(corporate_actions_exists, 1);
+        assert_eq!(news_articles_exists, 1);
     }
 
     #[test]

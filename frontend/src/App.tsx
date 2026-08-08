@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Sidebar, type PageId } from "./components/Sidebar";
 import { ComingSoonPage } from "./pages/ComingSoonPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { NewsPage } from "./pages/NewsPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
@@ -21,9 +22,10 @@ function App() {
     <main className="app-shell">
       <Sidebar activePage={activePage} onNavigate={setActivePage} />
       {activePage === "dashboard" ? <DashboardPage /> : null}
+      {activePage === "news" ? <NewsPage /> : null}
       {activePage === "holdings" ? <PortfolioPage /> : null}
       {activePage === "settings" ? <SettingsPage /> : null}
-      {activePage !== "dashboard" && activePage !== "holdings" && activePage !== "settings" ? <ComingSoonPage title={pageTitles[activePage]} /> : null}
+      {activePage !== "dashboard" && activePage !== "news" && activePage !== "holdings" && activePage !== "settings" ? <ComingSoonPage title={pageTitles[activePage]} /> : null}
     </main>
   );
 }
