@@ -25,7 +25,7 @@ React/TypeScript UI
 | Portfolio | 账户、现金、持仓快照与汇总 | 不直接修改交易结果；由交易流水驱动核算 |
 | Trading Ledger | 买卖记录、成本、可卖数、已/未实现盈亏 | 以交易日和 T+1 校验为准；精确金额计算 |
 | Portfolio Engine | 由已确认流水推导数量、可卖数、移动平均成本、已实现/未实现盈亏和市值 | 纯 Rust 服务层；使用 decimal，不访问 UI、数据库、行情接口或 AI |
-| Market Data | 股票/指数/ETF 抓取、规范化、缓存与质量标记 | 仅真实数据；保存 source、market timestamp、fetched_at、delay status |
+| Market Data | 股票/指数/ETF 抓取、规范化、缓存与质量标记 | `market_service` 通过 Adapter 契约接入来源；仅真实数据；保存 source、market timestamp、fetched_at、delay status |
 | Information | 新闻、公告、社区内容与证券关联 | 原文链接可追溯；社区内容非事实 |
 | Calendar | 公司和宏观事件 | 类型、日期、来源、确认状态均需保留 |
 | Review AI | 证据选择、结构化生成、人工复盘保存 | 强制 FACTS/INFERENCES/RISKS；不得提供交易承诺 |
@@ -48,4 +48,4 @@ React/TypeScript UI
 
 ## 6. 建议的交付顺序
 
-先建立 Rust 领域模型与迁移，再做 Adapter 契约和测试替身，然后接入一个合规数据源，最后实现 UI 与 AI 复盘。任何真实数据源接入之前，不向 UI 提供虚假“实时”状态。Portfolio Engine 按已确认交易日顺序处理流水；交易日有效性仍由交易日历模块在后续阶段提供。
+已建立 Rust Portfolio Engine、Market Data Adapter 契约及 SQLite 快照持久化。行情层包含 Tushare 日线 Adapter（仅 `CLOSED`）与东方财富公开行情 Adapter（交易时段始终 `DELAYED`）；HTTP 传输使用系统 `curl`，Tushare Key 只在运行时由 `TUSHARE_TOKEN` 读取且经标准输入传递，不进入命令行或日志。任何真实数据源接入之前，不向 UI 提供虚假“实时”状态。Portfolio Engine 按已确认交易日顺序处理流水；交易日有效性仍由交易日历模块在后续阶段提供。

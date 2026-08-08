@@ -6,7 +6,7 @@
 
 ## 当前状态
 
-项目已完成基础工程初始化、金融领域数据库和 Portfolio Engine：包含 Tauri 2、React、TypeScript、Rust、SQLite 迁移框架，以及纯 Rust 的移动平均成本、已实现/未实现盈亏、T+1/T+0/UNKNOWN 可卖规则计算服务。当前不包含 UI 业务页面、行情接口、股票数据或 AI 功能；行情刷新仍未实现。
+项目已完成基础工程初始化、金融领域数据库、Portfolio Engine 和 Market Data Engine：包含 Tauri 2、React、TypeScript、Rust、SQLite 迁移框架，纯 Rust 的移动平均成本、已实现/未实现盈亏、T+1/T+0/UNKNOWN 可卖规则计算，以及 Tushare/东方财富 Adapter、行情规范化与快照持久化。当前不包含 UI 业务页面、行情调度、股票数据展示或 AI 功能。
 
 ## 产品边界
 

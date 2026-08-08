@@ -6,6 +6,7 @@ use rusqlite::{params, Connection, Row};
 use tauri::Manager;
 
 use super::migrations;
+use crate::market_service::{MarketSnapshot, MarketSnapshotStore, MarketStatus, MarketStoreError};
 
 pub type DatabaseResult<T> = Result<T, DatabaseError>;
 
@@ -347,6 +348,49 @@ impl DatabaseService {
             .map_err(Into::into)
     }
 
+    fn upsert_market_source(&self, snapshot: &MarketSnapshot) -> DatabaseResult<i64> {
+        let (status, last_success_at, last_error) = if snapshot.delay_status == MarketStatus::NoData
+        {
+            (
+                MarketStatus::NoData.as_str(),
+                None,
+                snapshot.unavailable_reason.as_deref(),
+            )
+        } else {
+            ("ACTIVE", Some(snapshot.fetched_at.to_rfc3339()), None)
+        };
+        self.connection.execute(
+            "
+            INSERT INTO data_sources (
+                name, source_type, priority, base_url, enabled, status, last_success_at, last_error
+            ) VALUES (?1, 'MARKET', ?2, ?3, 1, ?4, ?5, ?6)
+            ON CONFLICT(name) DO UPDATE SET
+                source_type = excluded.source_type,
+                priority = excluded.priority,
+                base_url = excluded.base_url,
+                status = excluded.status,
+                last_success_at = excluded.last_success_at,
+                last_error = excluded.last_error,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            ",
+            params![
+                &snapshot.source.name,
+                snapshot.source.priority.as_i64(),
+                &snapshot.source.base_url,
+                status,
+                last_success_at,
+                last_error,
+            ],
+        )?;
+        self.connection
+            .query_row(
+                "SELECT id FROM data_sources WHERE name = ?1",
+                [&snapshot.source.name],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
     fn get_security(&self, id: i64) -> DatabaseResult<Security> {
         self.connection
             .query_row(
@@ -442,9 +486,106 @@ impl DatabaseService {
     }
 }
 
+impl MarketSnapshotStore for DatabaseService {
+    fn save_market_snapshot(&self, snapshot: &MarketSnapshot) -> Result<(), MarketStoreError> {
+        self.save_market_snapshot_inner(snapshot)
+            .map_err(|error| MarketStoreError {
+                message: error.to_string(),
+            })
+    }
+}
+
+impl DatabaseService {
+    fn save_market_snapshot_inner(&self, snapshot: &MarketSnapshot) -> DatabaseResult<()> {
+        let source_id = self.upsert_market_source(snapshot)?;
+
+        // A NO_DATA result has no provider market timestamp. Persist its safe source status only;
+        // inserting a fabricated timestamp into market_snapshots would violate traceability rules.
+        let Some(market_timestamp) = snapshot.market_timestamp else {
+            return Ok(());
+        };
+
+        self.connection.execute(
+            "
+            INSERT INTO market_snapshots (
+                data_source_id, snapshot_kind, market_timestamp, fetched_at, delay_status
+            ) VALUES (?1, 'FULL', ?2, ?3, ?4)
+            ",
+            params![
+                source_id,
+                market_timestamp.to_rfc3339(),
+                snapshot.fetched_at.to_rfc3339(),
+                snapshot.delay_status.as_str(),
+            ],
+        )?;
+        let snapshot_id = self.connection.last_insert_rowid();
+
+        for quote in &snapshot.quotes {
+            self.connection.execute(
+                "
+                INSERT INTO market_quotes (
+                    market_snapshot_id, security_id, data_source_id, current_price, change_pct,
+                    market_timestamp, fetched_at, delay_status, symbol, security_name, market,
+                    previous_close, price_change, volume, volume_unit, turnover_amount, turnover_unit, source
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
+                )
+                ON CONFLICT(security_id, data_source_id, market_timestamp) DO UPDATE SET
+                    market_snapshot_id = excluded.market_snapshot_id,
+                    current_price = excluded.current_price,
+                    change_pct = excluded.change_pct,
+                    fetched_at = excluded.fetched_at,
+                    delay_status = excluded.delay_status,
+                    symbol = excluded.symbol,
+                    security_name = excluded.security_name,
+                    market = excluded.market,
+                    previous_close = excluded.previous_close,
+                    price_change = excluded.price_change,
+                    volume = excluded.volume,
+                    volume_unit = excluded.volume_unit,
+                    turnover_amount = excluded.turnover_amount,
+                    turnover_unit = excluded.turnover_unit,
+                    source = excluded.source
+                ",
+                params![
+                    snapshot_id,
+                    quote.security_id,
+                    source_id,
+                    quote.current_price.to_string(),
+                    quote.change_percent.to_string(),
+                    quote.market_timestamp.to_rfc3339(),
+                    quote.fetched_at.to_rfc3339(),
+                    quote.delay_status.as_str(),
+                    &quote.symbol,
+                    &quote.name,
+                    &quote.market,
+                    quote.previous_close.to_string(),
+                    quote.price_change.to_string(),
+                    quote.volume.to_string(),
+                    &quote.volume_unit,
+                    quote.turnover_amount.to_string(),
+                    &quote.turnover_unit,
+                    &quote.source,
+                ],
+            )?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::market_service::{
+        DataSourcePriority, MarketDataSource, MarketQuote, MarketSnapshot, MarketStatus,
+        SourceClass,
+    };
+    use chrono::{TimeZone, Utc};
+    use rust_decimal::Decimal;
+
+    fn decimal(value: &str) -> Decimal {
+        value.parse().expect("valid decimal fixture")
+    }
 
     fn new_security() -> NewSecurity {
         NewSecurity {
@@ -491,7 +632,7 @@ mod tests {
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 2);
+        assert_eq!(migration_count, 3);
         assert_eq!(table_count, 7);
     }
 
@@ -611,7 +752,7 @@ mod tests {
             )
             .expect("insert legacy transaction");
 
-        migrations::apply(&mut connection).expect("upgrade database through 002");
+        migrations::apply(&mut connection).expect("upgrade database through 003");
 
         let migration_count: i64 = connection
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
@@ -647,7 +788,7 @@ mod tests {
             )
             .expect("verify corporate action table");
 
-        assert_eq!(migration_count, 2);
+        assert_eq!(migration_count, 3);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -658,5 +799,87 @@ mod tests {
             ("BUY".into(), "CONFIRMED".into(), "0.10".into(), "0".into())
         );
         assert_eq!(corporate_actions_exists, 1);
+    }
+
+    #[test]
+    fn market_snapshot_store_persists_normalized_quotes_and_no_data_source_state() {
+        let database = DatabaseService::open_in_memory().expect("initialize database");
+        let security = database
+            .create_security(new_security())
+            .expect("create security for quote");
+        let fetched_at = Utc.with_ymd_and_hms(2026, 8, 10, 2, 0, 0).unwrap();
+        let market_timestamp = Utc.with_ymd_and_hms(2026, 8, 10, 1, 59, 0).unwrap();
+        let source = MarketDataSource {
+            name: "Recorded test market source".into(),
+            base_url: "https://test.invalid/quotes".into(),
+            priority: DataSourcePriority::PublicQuote,
+            source_class: SourceClass::PublicQuote,
+        };
+        let snapshot = MarketSnapshot {
+            source: source.clone(),
+            market_timestamp: Some(market_timestamp),
+            fetched_at,
+            delay_status: MarketStatus::Delayed,
+            quotes: vec![MarketQuote {
+                security_id: security.id,
+                symbol: security.symbol.clone(),
+                name: security.name.clone(),
+                market: security.market.clone(),
+                current_price: decimal("1500.00"),
+                previous_close: decimal("1490.00"),
+                price_change: decimal("10.00"),
+                change_percent: decimal("0.6711"),
+                volume: decimal("100"),
+                volume_unit: "LOTS".into(),
+                turnover_amount: decimal("150000"),
+                turnover_unit: "CNY".into(),
+                market_timestamp,
+                fetched_at,
+                source: source.name.clone(),
+                delay_status: MarketStatus::Delayed,
+            }],
+            unavailable_reason: None,
+        };
+
+        database
+            .save_market_snapshot(&snapshot)
+            .expect("persist traceable quote snapshot");
+        let (symbol, previous_close, price_change, volume, source_name, delay_status):
+            (String, String, String, String, String, String) = database
+            .connection
+            .query_row(
+                "SELECT symbol, previous_close, price_change, volume, source, delay_status FROM market_quotes",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+            )
+            .expect("read persisted quote");
+        assert_eq!(symbol, "600519");
+        assert_eq!(previous_close, "1490.00");
+        assert_eq!(price_change, "10.00");
+        assert_eq!(volume, "100");
+        assert_eq!(source_name, "Recorded test market source");
+        assert_eq!(delay_status, "DELAYED");
+
+        let no_data = MarketSnapshot {
+            source,
+            market_timestamp: None,
+            fetched_at,
+            delay_status: MarketStatus::NoData,
+            quotes: Vec::new(),
+            unavailable_reason: Some("recorded source failure".into()),
+        };
+        database
+            .save_market_snapshot(&no_data)
+            .expect("persist no-data source state without creating a fabricated timestamp");
+        let (source_status, last_error): (String, Option<String>) = database
+            .connection
+            .query_row(
+                "SELECT status, last_error FROM data_sources WHERE name = 'Recorded test market source'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read no-data source state");
+        assert_eq!(source_status, "NO_DATA");
+        assert_eq!(last_error.as_deref(), Some("recorded source failure"));
     }
 }

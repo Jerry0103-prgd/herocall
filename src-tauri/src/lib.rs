@@ -1,6 +1,7 @@
 //! Desktop application bootstrap.
 
 mod database;
+pub mod market_service;
 pub mod portfolio_service;
 
 pub fn run() {
