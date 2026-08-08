@@ -11,8 +11,9 @@ use serde::Serialize;
 use crate::{
     database::service::{DatabaseError, DatabaseService},
     market_service::{
-        MarketDataAdapter, MarketFetchRequest, MarketPhase, MarketService, MarketSnapshot,
-        MarketStoreError, TushareAdapter,
+        EastmoneyAdapter, MarketDataAdapter, MarketFetchRequest, MarketPhase, MarketSecurity,
+        MarketService, MarketSnapshot, MarketSnapshotStore, MarketStoreError, TencentAdapter,
+        TushareAdapter,
     },
 };
 
@@ -26,6 +27,25 @@ pub struct MarketRefreshView {
     pub market_timestamp: Option<String>,
     pub fetched_at: String,
     pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotSectionView {
+    pub source: String,
+    pub status: String,
+    pub item_count: usize,
+    pub updated_at: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualMarketSnapshotView {
+    pub holdings: MarketRefreshView,
+    pub indices: SnapshotSectionView,
+    pub news: SnapshotSectionView,
+    pub events: SnapshotSectionView,
 }
 
 #[derive(Debug)]
@@ -60,6 +80,43 @@ impl From<MarketStoreError> for MarketRefreshError {
 pub struct MarketRefreshService;
 
 impl MarketRefreshService {
+    /// Performs exactly one user-initiated collection. There is no scheduler, polling loop, or
+    /// persistent connection: every provider request originates from this command invocation.
+    pub fn refresh_today_snapshot(
+        database: &DatabaseService,
+    ) -> Result<ManualMarketSnapshotView, MarketRefreshError> {
+        let holdings = database.list_market_securities_for_holdings()?;
+        let holding_snapshot = Self::fetch_holding_snapshot(&holdings);
+        database.save_market_snapshot(&holding_snapshot)?;
+
+        let index_snapshot = Self::fetch_index_snapshot();
+        database.save_market_index_snapshot(&index_snapshot)?;
+
+        let holding_configuration = if TushareAdapter::is_configured() {
+            "CONFIGURED"
+        } else {
+            "PUBLIC_ONLY"
+        };
+        let holdings_view = Self::to_view(holding_snapshot, holding_configuration);
+        let indices_view = Self::section_view(index_snapshot);
+
+        // News/Event Adapter contracts already exist, but no external Adapter is enabled in V1.
+        // The manual snapshot reports this explicitly instead of inventing articles or dates.
+        let no_adapter = |message: &str| SnapshotSectionView {
+            source: "未配置数据源".into(),
+            status: "NO_DATA".into(),
+            item_count: 0,
+            updated_at: None,
+            message: Some(message.into()),
+        };
+        Ok(ManualMarketSnapshotView {
+            holdings: holdings_view,
+            indices: indices_view,
+            news: no_adapter("新闻数据 Adapter 尚未配置；本次未保存新闻。"),
+            events: no_adapter("事件数据 Adapter 尚未配置；本次未保存事件。"),
+        })
+    }
+
     pub fn refresh_tushare(
         database: &DatabaseService,
     ) -> Result<MarketRefreshView, MarketRefreshError> {
@@ -84,9 +141,79 @@ impl MarketRefreshService {
         Ok(MarketService::fetch_and_store(adapter, &request, database)?)
     }
 
+    fn fetch_holding_snapshot(securities: &[MarketSecurity]) -> MarketSnapshot {
+        let eastmoney =
+            EastmoneyAdapter::new().expect("Eastmoney adapter has no constructor state");
+        let tencent = TencentAdapter::new().expect("Tencent adapter has no constructor state");
+        let request = MarketFetchRequest::now(securities.to_vec(), MarketPhase::Unknown);
+        if TushareAdapter::is_configured() {
+            let tushare = TushareAdapter::new().expect("Tushare adapter has no constructor state");
+            MarketService::fetch_with_fallback(&[&tushare, &eastmoney, &tencent], &request)
+        } else {
+            MarketService::fetch_with_fallback(&[&eastmoney, &tencent], &request)
+        }
+    }
+
+    fn fetch_index_snapshot() -> MarketSnapshot {
+        let eastmoney =
+            EastmoneyAdapter::new().expect("Eastmoney adapter has no constructor state");
+        let tencent = TencentAdapter::new().expect("Tencent adapter has no constructor state");
+        let request = MarketFetchRequest::now(
+            vec![
+                MarketSecurity {
+                    security_id: -1,
+                    symbol: "000001".into(),
+                    name: "上证指数".into(),
+                    market: "SSE".into(),
+                },
+                MarketSecurity {
+                    security_id: -2,
+                    symbol: "399001".into(),
+                    name: "深证成指".into(),
+                    market: "SZSE".into(),
+                },
+                MarketSecurity {
+                    security_id: -3,
+                    symbol: "399006".into(),
+                    name: "创业板指".into(),
+                    market: "SZSE".into(),
+                },
+                MarketSecurity {
+                    security_id: -4,
+                    symbol: "000688".into(),
+                    name: "科创50".into(),
+                    market: "SSE".into(),
+                },
+            ],
+            MarketPhase::Unknown,
+        );
+        let mut snapshot = MarketService::fetch_with_fallback(&[&eastmoney, &tencent], &request);
+        for quote in &mut snapshot.quotes {
+            let canonical_symbol = match (quote.symbol.as_str(), quote.market.as_str()) {
+                ("000001", "SSE") => "000001.SH".into(),
+                ("399001", "SZSE") => "399001.SZ".into(),
+                ("399006", "SZSE") => "399006.SZ".into(),
+                ("000688", "SSE") => "000688.SH".into(),
+                _ => quote.symbol.clone(),
+            };
+            quote.symbol = canonical_symbol;
+        }
+        snapshot
+    }
+
+    fn section_view(snapshot: MarketSnapshot) -> SnapshotSectionView {
+        SnapshotSectionView {
+            source: snapshot.source.name,
+            status: snapshot.delay_status.as_str().into(),
+            item_count: snapshot.quotes.len(),
+            updated_at: snapshot.market_timestamp.map(|time| time.to_rfc3339()),
+            message: snapshot.unavailable_reason,
+        }
+    }
+
     fn to_view(snapshot: MarketSnapshot, configuration_status: &str) -> MarketRefreshView {
         let message = if configuration_status == "UNCONFIGURED" {
-            Some("Tushare 未配置；请在受保护的运行时环境中设置 TUSHARE_TOKEN。".into())
+            Some("Tushare 未配置；请在设置页保存 Token 到系统钥匙串。".into())
         } else {
             snapshot.unavailable_reason.clone()
         };
@@ -228,5 +355,26 @@ mod tests {
         assert_eq!(view.quote_count, 0);
         assert_eq!(view.market_timestamp, None);
         assert!(view.message.expect("safe message").contains("未配置"));
+    }
+
+    #[test]
+    fn manual_snapshot_section_preserves_source_status_and_time() {
+        let timestamp = Utc.with_ymd_and_hms(2026, 8, 8, 1, 0, 0).unwrap();
+        let section = MarketRefreshService::section_view(MarketSnapshot {
+            source: MarketDataSource {
+                name: "东方财富公开行情".into(),
+                base_url: "https://example.invalid".into(),
+                priority: DataSourcePriority::PublicQuote,
+                source_class: SourceClass::PublicQuote,
+            },
+            market_timestamp: Some(timestamp),
+            fetched_at: timestamp,
+            delay_status: MarketStatus::Delayed,
+            quotes: Vec::new(),
+            unavailable_reason: None,
+        });
+        assert_eq!(section.source, "东方财富公开行情");
+        assert_eq!(section.status, "DELAYED");
+        assert_eq!(section.updated_at, Some(timestamp.to_rfc3339()));
     }
 }

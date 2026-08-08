@@ -14,18 +14,23 @@ mod news_service;
 pub mod portfolio_service;
 mod portfolio_ui_service;
 mod review_service;
+mod secure_storage;
 mod settings_service;
 
 use ai_service::{AiReviewView, AiService, AiServiceStatusView};
 use dashboard_service::{AssetSummaryView, DashboardService, MarketIndexQuoteView};
 use event_service::{EventService, EventView};
 use initialization_service::{InitializationService, InitializationStatusView};
-use market_refresh_service::{MarketRefreshService, MarketRefreshView};
+use market_refresh_service::{ManualMarketSnapshotView, MarketRefreshService, MarketRefreshView};
 use news_service::{NewsArticleView, NewsService};
 use portfolio_ui_service::{
     CreateHoldingInput, PortfolioHoldingView, PortfolioUiService, UpdateHoldingInput,
 };
 use review_service::{DailyReviewView, ReviewService};
+use secure_storage::{
+    get_tushare_status as load_tushare_status, remove_tushare_token as delete_tushare_token,
+    save_tushare_token as store_tushare_token, TushareStatusView,
+};
 use settings_service::{
     BackupView, CashAccountView, CreateCashAccountInput, SettingsService, SettingsStatusView,
 };
@@ -44,9 +49,18 @@ fn get_market_snapshot(app: tauri::AppHandle) -> Result<Vec<MarketIndexQuoteView
     Ok(DashboardService::load_market_snapshot(&database))
 }
 
-/// Refreshes only the user's existing holdings through Tushare's source-backed daily endpoint.
-/// The command never accepts a token from the UI and never substitutes another provider when it
-/// is unconfigured or unavailable.
+/// Collects one user-requested market snapshot. This command is never scheduled or kept alive;
+/// public-provider data remains labelled delayed, and missing news/event adapters return NO_DATA.
+#[tauri::command]
+fn refresh_today_market_snapshot(
+    app: tauri::AppHandle,
+) -> Result<ManualMarketSnapshotView, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    MarketRefreshService::refresh_today_snapshot(&database).map_err(|error| error.to_string())
+}
+
+/// Legacy explicit Tushare-only refresh. The Dashboard uses `refresh_today_market_snapshot`.
 #[tauri::command]
 fn refresh_tushare_market_data(app: tauri::AppHandle) -> Result<MarketRefreshView, String> {
     let database = database::service::DatabaseService::open_app_database(&app)
@@ -93,6 +107,23 @@ fn get_settings_status(app: tauri::AppHandle) -> Result<SettingsStatusView, Stri
     let database = database::service::DatabaseService::open_app_database(&app)
         .map_err(|error| error.to_string())?;
     SettingsService::load_status(&database).map_err(|error| error.to_string())
+}
+
+/// Stores the token in the OS secure credential store (macOS Keychain). It returns only the
+/// safe configured/unconfigured state; the token is never persisted to SQLite or returned to UI.
+#[tauri::command]
+fn save_tushare_token(token: String) -> Result<TushareStatusView, String> {
+    store_tushare_token(&token).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_tushare_token() -> Result<TushareStatusView, String> {
+    delete_tushare_token().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_tushare_status() -> Result<TushareStatusView, String> {
+    load_tushare_status().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -199,12 +230,16 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_asset_summary,
             get_market_snapshot,
+            refresh_today_market_snapshot,
             refresh_tushare_market_data,
             get_portfolio_holdings,
             create_portfolio_holding,
             update_portfolio_holding,
             delete_portfolio_holding,
             get_settings_status,
+            save_tushare_token,
+            remove_tushare_token,
+            get_tushare_status,
             get_cash_accounts,
             create_cash_account,
             create_database_backup,

@@ -1,9 +1,9 @@
 //! Application service for local system configuration.
 //!
-//! Secrets are intentionally outside the SQLite model: Tushare is configured only through the
-//! protected runtime environment and this module returns a boolean status, never the token.
+//! Secrets are intentionally outside the SQLite model: Tushare is configured through the system
+//! credential store and this module returns a safe status, never the token.
 
-use std::{env, error::Error, fmt, str::FromStr};
+use std::{error::Error, fmt, str::FromStr};
 
 use chrono::Utc;
 use rust_decimal::Decimal;
@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 use crate::database::service::{CashAccount, DatabaseError, DatabaseService, NewCashAccount};
+use crate::secure_storage::{get_tushare_status, SecureStorageError};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +47,7 @@ pub struct BackupView {
 #[derive(Debug)]
 pub enum SettingsError {
     Database(DatabaseError),
+    SecureStorage(SecureStorageError),
     Validation(&'static str),
     AppPath(String),
 }
@@ -54,6 +56,7 @@ impl fmt::Display for SettingsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Database(error) => write!(formatter, "database error: {error}"),
+            Self::SecureStorage(error) => write!(formatter, "secure storage error: {error}"),
             Self::Validation(message) => formatter.write_str(message),
             Self::AppPath(message) => write!(formatter, "application path error: {message}"),
         }
@@ -68,21 +71,25 @@ impl From<DatabaseError> for SettingsError {
     }
 }
 
+impl From<SecureStorageError> for SettingsError {
+    fn from(error: SecureStorageError) -> Self {
+        Self::SecureStorage(error)
+    }
+}
+
 pub struct SettingsService;
 
 impl SettingsService {
-    /// Reports only whether the protected runtime configuration exists. The token must not be
+    /// Reports only whether protected credential configuration exists. The token must not be
     /// persisted, logged, returned through a command, or rendered by the frontend.
     pub fn load_status(database: &DatabaseService) -> Result<SettingsStatusView, SettingsError> {
-        Ok(Self::load_status_with_token(
-            database,
-            env::var("TUSHARE_TOKEN").ok().as_deref(),
-        )?)
+        let tushare_status = get_tushare_status()?.status;
+        Self::load_status_with_tushare_status(database, tushare_status)
     }
 
-    fn load_status_with_token(
+    fn load_status_with_tushare_status(
         database: &DatabaseService,
-        token: Option<&str>,
+        tushare_status: String,
     ) -> Result<SettingsStatusView, SettingsError> {
         let latest_source = database.latest_market_source_status()?;
         let (market_connection_status, last_sync_at) = match latest_source {
@@ -93,11 +100,7 @@ impl SettingsService {
         };
 
         Ok(SettingsStatusView {
-            tushare_status: if token.is_some_and(|value| !value.trim().is_empty()) {
-                "已配置".into()
-            } else {
-                "未配置".into()
-            },
+            tushare_status,
             database_status: "正常".into(),
             market_connection_status,
             last_sync_at,
@@ -181,10 +184,10 @@ mod tests {
     #[test]
     fn settings_reports_only_safe_configuration_state_and_saves_cny_cash() {
         let database = DatabaseService::open_in_memory().expect("create database");
-        let configured = SettingsService::load_status_with_token(&database, Some("secret-token"))
-            .expect("load configured status");
+        let configured =
+            SettingsService::load_status_with_tushare_status(&database, "已配置".into())
+                .expect("load configured status");
         assert_eq!(configured.tushare_status, "已配置");
-        assert!(!format!("{configured:?}").contains("secret-token"));
         assert_eq!(configured.market_connection_status, "未确认");
 
         let account = SettingsService::create_cny_cash_account(

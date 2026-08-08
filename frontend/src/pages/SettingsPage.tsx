@@ -6,6 +6,9 @@ import {
   createDatabaseBackup,
   loadCashAccounts,
   loadSettingsStatus,
+  loadTushareStatus,
+  removeTushareToken,
+  saveTushareToken,
   type CashAccount,
   type SettingsStatus,
 } from "../services/settings";
@@ -20,14 +23,17 @@ export function SettingsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
+  const [isSavingToken, setIsSavingToken] = useState(false);
+  const [isRemovingToken, setIsRemovingToken] = useState(false);
   const [isCashFormOpen, setIsCashFormOpen] = useState(false);
+  const [tushareToken, setTushareToken] = useState("");
   const [message, setMessage] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [nextStatus, nextAccounts] = await Promise.all([loadSettingsStatus(), loadCashAccounts()]);
-      setStatus(nextStatus);
+      const [nextStatus, nextAccounts, tokenStatus] = await Promise.all([loadSettingsStatus(), loadCashAccounts(), loadTushareStatus()]);
+      setStatus({ ...nextStatus, tushareStatus: tokenStatus.status });
       setCashAccounts(nextAccounts);
       setMessage(null);
     } catch {
@@ -64,6 +70,38 @@ export function SettingsPage() {
     }
   }
 
+  async function saveToken() {
+    if (!tushareToken.trim()) {
+      setMessage("请输入 Tushare Token");
+      return;
+    }
+    setIsSavingToken(true);
+    try {
+      const tokenStatus = await saveTushareToken(tushareToken);
+      setTushareToken("");
+      setStatus((current) => current ? { ...current, tushareStatus: tokenStatus.status } : current);
+      setMessage("Tushare Token 已安全保存到系统钥匙串");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Tushare Token 保存失败");
+    } finally {
+      setIsSavingToken(false);
+    }
+  }
+
+  async function removeToken() {
+    setIsRemovingToken(true);
+    try {
+      const tokenStatus = await removeTushareToken();
+      setTushareToken("");
+      setStatus((current) => current ? { ...current, tushareStatus: tokenStatus.status } : current);
+      setMessage("Tushare Token 已从系统钥匙串删除");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Tushare Token 删除失败");
+    } finally {
+      setIsRemovingToken(false);
+    }
+  }
+
   return (
     <section className="page settings-page" aria-labelledby="settings-title">
       <header className="page-header">
@@ -79,9 +117,17 @@ export function SettingsPage() {
       <section className="settings-section" aria-labelledby="market-config-title">
         <div className="section-heading"><div><p className="section-kicker">Market source</p><h2 id="market-config-title">行情数据源配置</h2></div></div>
         <div className="settings-card settings-config-card">
-          <div><strong>Tushare</strong><p>仅检测运行时受保护配置状态，Token 不会保存、回传或显示。</p></div>
+          <div><strong>Tushare</strong><p>Token 只保存到 macOS 系统钥匙串，不会写入 SQLite、源码、日志或再次回传到界面。</p></div>
           <span className={`settings-status ${status?.tushareStatus === "已配置" ? "is-configured" : ""}`}>{status?.tushareStatus ?? "未确认"}</span>
         </div>
+        <form className="settings-card tushare-token-form" onSubmit={(event) => { event.preventDefault(); void saveToken(); }}>
+          <label htmlFor="tushare-token">Tushare Token</label>
+          <div className="tushare-token-actions">
+            <input autoComplete="off" disabled={isSavingToken || isRemovingToken} id="tushare-token" onChange={(event) => setTushareToken(event.target.value)} placeholder="输入后仅保存到系统钥匙串" type="password" value={tushareToken} />
+            <button className="primary-button" disabled={isSavingToken || isRemovingToken} type="submit">{isSavingToken ? "正在保存…" : "保存 Token"}</button>
+            <button className="secondary-button" disabled={isSavingToken || isRemovingToken || status?.tushareStatus !== "已配置"} onClick={() => void removeToken()} type="button">{isRemovingToken ? "正在删除…" : "删除 Token"}</button>
+          </div>
+        </form>
       </section>
 
       <section className="settings-section" aria-labelledby="cash-title">

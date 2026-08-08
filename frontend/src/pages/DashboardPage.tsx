@@ -7,7 +7,7 @@ import {
   loadAssetSummary,
   loadMarketSnapshot,
   noDataMarketSnapshot,
-  refreshTushareMarketData,
+  refreshTodayMarketSnapshot,
   type AssetSummary,
   type MarketIndexQuote,
 } from "../services/dashboard";
@@ -46,14 +46,19 @@ export function DashboardPage() {
   async function refreshMarketData() {
     setIsRefreshing(true);
     try {
-      const result = await refreshTushareMarketData();
-      if (result.configurationStatus === "UNCONFIGURED") {
-        setConnectionNotice("Tushare 未配置：请在受保护的运行时环境中设置 TUSHARE_TOKEN。");
-      } else if (result.status === "NO_DATA") {
-        setConnectionNotice(result.message ?? "暂无可验证行情数据");
-      } else {
-        setConnectionNotice(`已保存 ${result.quoteCount} 条 ${result.source} 收盘行情。`);
-      }
+      const result = await refreshTodayMarketSnapshot();
+      const holdingsMessage = result.holdings.status === "NO_DATA"
+        ? (result.holdings.message ?? "暂无可验证持仓行情")
+        : `持仓 ${result.holdings.quoteCount} 条（${result.holdings.source} · ${result.holdings.status}）`;
+      const indicesMessage = result.indices.status === "NO_DATA"
+        ? "指数暂无数据"
+        : `指数 ${result.indices.itemCount} 条（${result.indices.source} · ${result.indices.status}）`;
+      const optionalMessage = [result.news, result.events]
+        .filter((section) => section.status === "NO_DATA")
+        .map((section) => section.message)
+        .filter((message): message is string => Boolean(message))
+        .join(" ");
+      setConnectionNotice(`${holdingsMessage}；${indicesMessage}${optionalMessage ? `。${optionalMessage}` : "。"}`);
       await loadDashboard();
     } catch {
       setConnectionNotice("行情刷新失败；未写入任何替代价格。");
@@ -70,7 +75,7 @@ export function DashboardPage() {
           <h1 id="dashboard-title">今日总览</h1>
           <p>本地资产与市场快照。仅展示可追溯、已验证的数据。</p>
         </div>
-        <div className="dashboard-actions"><span className="readonly-badge">只读模式</span><button className="secondary-button" disabled={isRefreshing} onClick={() => void refreshMarketData()} type="button">{isRefreshing ? "正在刷新…" : "刷新持仓行情"}</button></div>
+        <div className="dashboard-actions"><span className="readonly-badge">只读模式</span><button className="secondary-button" disabled={isRefreshing} onClick={() => void refreshMarketData()} type="button">{isRefreshing ? "正在更新…" : "更新今日市场快照"}</button></div>
       </header>
 
       {connectionNotice ? <p className="notice" role="status">{connectionNotice}</p> : null}
@@ -90,7 +95,7 @@ export function DashboardPage() {
       <section className="market-section" aria-label="A股主要指数">
         <div className="section-heading">
           <div><p className="section-kicker">市场</p><h2>A股主要指数</h2></div>
-          <span>行情未接入页面刷新</span>
+          <span>仅在手动更新快照后变更；显示来源、状态与最后更新时间</span>
         </div>
         <div className="index-grid">
           {indices.map((quote) => <MarketIndexCard key={quote.symbol} quote={quote} />)}

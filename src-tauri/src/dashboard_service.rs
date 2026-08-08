@@ -166,9 +166,15 @@ impl DashboardService {
         })
     }
 
-    /// Index identities are presentation configuration only. They carry no prices or inferred
-    /// values until a verified index-data adapter persists source-backed quotes.
-    pub fn load_market_snapshot(_database: &DatabaseService) -> Vec<MarketIndexQuoteView> {
+    /// Returns only persisted, source-backed index records. Missing records stay `NO_DATA`;
+    /// identity labels are presentation metadata, never financial values.
+    pub fn load_market_snapshot(database: &DatabaseService) -> Vec<MarketIndexQuoteView> {
+        let persisted = database
+            .latest_market_index_quotes()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|record| (record.symbol.clone(), record))
+            .collect::<std::collections::HashMap<_, _>>();
         [
             ("上证指数", "000001.SH"),
             ("深证成指", "399001.SZ"),
@@ -176,14 +182,25 @@ impl DashboardService {
             ("科创50", "000688.SH"),
         ]
         .into_iter()
-        .map(|(name, symbol)| MarketIndexQuoteView {
-            name: name.into(),
-            symbol: symbol.into(),
-            current_price: None,
-            change_percent: None,
-            source: None,
-            status: "NO_DATA".into(),
-            updated_at: None,
+        .map(|(name, symbol)| match persisted.get(symbol) {
+            Some(record) => MarketIndexQuoteView {
+                name: record.name.clone(),
+                symbol: record.symbol.clone(),
+                current_price: Some(record.current_price.clone()),
+                change_percent: record.change_percent.clone(),
+                source: Some(record.source.clone()),
+                status: record.status.clone(),
+                updated_at: Some(record.updated_at.clone()),
+            },
+            None => MarketIndexQuoteView {
+                name: name.into(),
+                symbol: symbol.into(),
+                current_price: None,
+                change_percent: None,
+                source: None,
+                status: "NO_DATA".into(),
+                updated_at: None,
+            },
         })
         .collect()
     }
@@ -334,5 +351,49 @@ mod tests {
                 && index.updated_at.is_none()
                 && index.status == "NO_DATA"
         }));
+    }
+
+    #[test]
+    fn dashboard_reads_only_persisted_index_snapshot_metadata() {
+        let database = DatabaseService::open_in_memory().expect("initialize database");
+        let timestamp = Utc.with_ymd_and_hms(2026, 8, 8, 6, 0, 0).unwrap();
+        database
+            .save_market_index_snapshot(&MarketSnapshot {
+                source: MarketDataSource {
+                    name: "Recorded index source".into(),
+                    base_url: "https://test.invalid/index".into(),
+                    priority: DataSourcePriority::PublicQuote,
+                    source_class: SourceClass::PublicQuote,
+                },
+                market_timestamp: Some(timestamp),
+                fetched_at: timestamp,
+                delay_status: MarketStatus::Delayed,
+                quotes: vec![MarketQuote {
+                    security_id: -1,
+                    symbol: "000001.SH".into(),
+                    name: "上证指数".into(),
+                    market: "SSE".into(),
+                    current_price: decimal("3200"),
+                    previous_close: decimal("3180"),
+                    price_change: decimal("20"),
+                    change_percent: decimal("0.63"),
+                    volume: decimal("0"),
+                    volume_unit: "SOURCE_DECLARED".into(),
+                    turnover_amount: decimal("0"),
+                    turnover_unit: "SOURCE_DECLARED".into(),
+                    market_timestamp: timestamp,
+                    fetched_at: timestamp,
+                    source: "Recorded index source".into(),
+                    delay_status: MarketStatus::Delayed,
+                }],
+                unavailable_reason: None,
+            })
+            .expect("persist index snapshot");
+
+        let indices = DashboardService::load_market_snapshot(&database);
+        assert_eq!(indices[0].current_price.as_deref(), Some("3200"));
+        assert_eq!(indices[0].source.as_deref(), Some("Recorded index source"));
+        assert_eq!(indices[0].status, "DELAYED");
+        assert_eq!(indices[1].status, "NO_DATA");
     }
 }

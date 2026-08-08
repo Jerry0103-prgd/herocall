@@ -102,6 +102,17 @@ pub struct MarketSourceStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketIndexQuoteRecord {
+    pub name: String,
+    pub symbol: String,
+    pub current_price: String,
+    pub change_percent: Option<String>,
+    pub source: String,
+    pub status: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewsArticle {
     pub id: i64,
     pub title: String,
@@ -865,6 +876,43 @@ impl DatabaseService {
             .map_err(Into::into)
     }
 
+    pub fn latest_market_index_quotes(&self) -> DatabaseResult<Vec<MarketIndexQuoteRecord>> {
+        let mut statement = self.connection.prepare(
+            "
+            WITH latest AS (
+                SELECT miq.symbol, MAX(miq.market_timestamp) AS market_timestamp
+                FROM market_index_quotes miq
+                GROUP BY miq.symbol
+            )
+            SELECT miq.name, miq.symbol, miq.current_price, miq.change_pct,
+                   ds.name, miq.delay_status, miq.market_timestamp
+            FROM market_index_quotes miq
+            JOIN latest ON latest.symbol = miq.symbol
+                      AND latest.market_timestamp = miq.market_timestamp
+            JOIN market_snapshots ms ON ms.id = miq.market_snapshot_id
+            JOIN data_sources ds ON ds.id = ms.data_source_id
+            ORDER BY CASE miq.symbol
+                WHEN '000001.SH' THEN 1
+                WHEN '399001.SZ' THEN 2
+                WHEN '399006.SZ' THEN 3
+                WHEN '000688.SH' THEN 4
+                ELSE 99 END
+            ",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(MarketIndexQuoteRecord {
+                name: row.get(0)?,
+                symbol: row.get(1)?,
+                current_price: row.get(2)?,
+                change_percent: row.get(3)?,
+                source: row.get(4)?,
+                status: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// Produces a consistent SQLite copy through SQLite itself. The caller must provide a unique
     /// destination; existing backups are never overwritten.
     pub fn backup_to(&self, destination: &Path) -> DatabaseResult<()> {
@@ -1436,6 +1484,55 @@ impl DatabaseService {
         }
         Ok(())
     }
+
+    pub fn save_market_index_snapshot(&self, snapshot: &MarketSnapshot) -> DatabaseResult<()> {
+        let source_id = self.upsert_market_source(snapshot)?;
+        let Some(market_timestamp) = snapshot.market_timestamp else {
+            return Ok(());
+        };
+        self.connection.execute(
+            "
+            INSERT INTO market_snapshots (
+                data_source_id, snapshot_kind, market_timestamp, fetched_at, delay_status
+            ) VALUES (?1, 'INDICES', ?2, ?3, ?4)
+            ",
+            params![
+                source_id,
+                market_timestamp.to_rfc3339(),
+                snapshot.fetched_at.to_rfc3339(),
+                snapshot.delay_status.as_str(),
+            ],
+        )?;
+        let snapshot_id = self.connection.last_insert_rowid();
+        for quote in &snapshot.quotes {
+            self.connection.execute(
+                "
+                INSERT INTO market_index_quotes (
+                    market_snapshot_id, name, symbol, current_price, change_pct,
+                    market_timestamp, fetched_at, delay_status
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ON CONFLICT(market_snapshot_id, symbol) DO UPDATE SET
+                    name = excluded.name,
+                    current_price = excluded.current_price,
+                    change_pct = excluded.change_pct,
+                    market_timestamp = excluded.market_timestamp,
+                    fetched_at = excluded.fetched_at,
+                    delay_status = excluded.delay_status
+                ",
+                params![
+                    snapshot_id,
+                    &quote.name,
+                    &quote.symbol,
+                    quote.current_price.to_string(),
+                    quote.change_percent.to_string(),
+                    quote.market_timestamp.to_rfc3339(),
+                    quote.fetched_at.to_rfc3339(),
+                    quote.delay_status.as_str(),
+                ],
+            )?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1491,15 +1588,15 @@ mod tests {
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN (
                     'securities', 'holdings', 'transactions', 'cash_accounts',
                     'market_snapshots', 'market_quotes', 'data_sources', 'news_articles',
-                    'daily_reviews', 'ai_reviews', 'events', 'app_settings'
+                    'daily_reviews', 'ai_reviews', 'events', 'app_settings', 'market_index_quotes'
                 )",
                 [],
                 |row| row.get(0),
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 8);
-        assert_eq!(table_count, 12);
+        assert_eq!(migration_count, 9);
+        assert_eq!(table_count, 13);
     }
 
     #[test]
@@ -1688,8 +1785,15 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("verify app settings table");
+        let market_index_quotes_exists: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'market_index_quotes'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("verify market index quote table");
 
-        assert_eq!(migration_count, 8);
+        assert_eq!(migration_count, 9);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -1705,6 +1809,7 @@ mod tests {
         assert_eq!(ai_reviews_exists, 1);
         assert_eq!(events_exists, 1);
         assert_eq!(app_settings_exists, 1);
+        assert_eq!(market_index_quotes_exists, 1);
     }
 
     #[test]

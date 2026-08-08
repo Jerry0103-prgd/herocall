@@ -106,6 +106,11 @@ tbody tr:hover { background: #142138; }
 .settings-section { margin-bottom: 36px; }
 .settings-card, .cash-account-form { border: 1px solid #263650; border-radius: 12px; background: rgb(15 27 45 / 88%); box-shadow: 0 12px 35px rgb(0 0 0 / 12%); }
 .settings-config-card, .backup-card { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 20px; }
+.tushare-token-form { display: grid; gap: 10px; margin-top: 12px; padding: 16px 20px 20px; color: #bac7d6; font-size: 12px; }
+.tushare-token-actions { display: flex; align-items: center; gap: 10px; }
+.tushare-token-actions input { min-width: 260px; flex: 1; padding: 10px 11px; border: 1px solid #34445e; border-radius: 7px; outline: none; background: #0c1626; color: #eef4fb; }
+.tushare-token-actions input:focus { border-color: #69dcb2; }
+.tushare-token-actions input:disabled { color: #8190a6; cursor: not-allowed; }
 .settings-card strong { display: block; color: #ebf2fa; }
 .settings-card p { margin: 7px 0 0; color: #8494aa; font-size: 12px; line-height: 1.6; }
 .settings-status { flex: 0 0 auto; padding: 6px 10px; border: 1px solid #56647a; border-radius: 999px; color: #bac7d6; font-size: 12px; }

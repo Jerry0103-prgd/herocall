@@ -6,19 +6,22 @@
 
 use std::{
     collections::HashMap,
-    env,
     error::Error,
     fmt,
     io::Write,
     process::{Command, Stdio},
+    str::FromStr,
 };
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
 
+use crate::secure_storage::load_tushare_token_for_adapter;
+
 const TUSHARE_API_URL: &str = "https://api.tushare.pro";
 const EASTMONEY_QUOTE_URL: &str = "https://push2.eastmoney.com/api/qt/ulist.np/get";
+const TENCENT_QUOTE_URL: &str = "https://qt.gtimg.cn/q=";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarketStatus {
@@ -404,8 +407,8 @@ fn aggregate_status(quotes: &[MarketQuote]) -> MarketStatus {
     }
 }
 
-/// Tushare Pro adapter. It reads `TUSHARE_TOKEN` only at runtime and uses the daily endpoint,
-/// therefore all usable records are labelled `CLOSED`, never real-time.
+/// Tushare Pro adapter. It reads its token only from the OS secure credential store and uses the
+/// daily endpoint, therefore all usable records are labelled `CLOSED`, never real-time.
 pub struct TushareAdapter {}
 
 impl TushareAdapter {
@@ -414,22 +417,23 @@ impl TushareAdapter {
     }
 
     fn token() -> Result<String, MarketAdapterError> {
-        env::var("TUSHARE_TOKEN")
-            .ok()
+        load_tushare_token_for_adapter()
+            .map_err(|_| {
+                MarketAdapterError::Configuration("Tushare secure credential unavailable")
+            })?
             .filter(|value| !value.trim().is_empty())
             .ok_or(MarketAdapterError::Configuration(
-                "TUSHARE_TOKEN is not configured",
+                "Tushare Token is not configured",
             ))
     }
 
     /// This returns only a boolean so callers can communicate configuration state without ever
     /// returning, persisting, or logging the token itself.
     pub fn is_configured() -> bool {
-        Self::has_token(env::var("TUSHARE_TOKEN").ok().as_deref())
-    }
-
-    fn has_token(token: Option<&str>) -> bool {
-        token.is_some_and(|value| !value.trim().is_empty())
+        load_tushare_token_for_adapter()
+            .ok()
+            .flatten()
+            .is_some_and(|value| !value.trim().is_empty())
     }
 }
 
@@ -508,6 +512,44 @@ impl MarketDataAdapter for EastmoneyAdapter {
     }
 }
 
+/// Tencent's public quote endpoint. It is intentionally marked as public/delayed: the endpoint
+/// does not provide this application with an authorization to display data as real-time.
+pub struct TencentAdapter {}
+
+impl TencentAdapter {
+    pub fn new() -> Result<Self, MarketAdapterError> {
+        Ok(Self {})
+    }
+}
+
+impl MarketDataAdapter for TencentAdapter {
+    fn source(&self) -> MarketDataSource {
+        MarketDataSource {
+            name: "腾讯公开行情".into(),
+            base_url: TENCENT_QUOTE_URL.into(),
+            priority: DataSourcePriority::Backup,
+            source_class: SourceClass::PublicQuote,
+        }
+    }
+
+    fn fetch(
+        &self,
+        request: &MarketFetchRequest,
+    ) -> Result<Vec<RawMarketQuote>, MarketAdapterError> {
+        if request.securities.is_empty() {
+            return Err(MarketAdapterError::NoData);
+        }
+        let codes = request
+            .securities
+            .iter()
+            .map(to_tencent_code)
+            .collect::<Result<Vec<_>, _>>()?
+            .join(",");
+        let text = curl_text(&format!("{TENCENT_QUOTE_URL}{codes}"))?;
+        parse_tencent_quotes(&text, &request.securities)
+    }
+}
+
 /// Minimal cross-platform HTTPS transport using the system `curl` executable. macOS and current
 /// supported Windows releases include curl. Tushare request bodies are written through stdin, so
 /// keys cannot leak through process arguments or error diagnostics.
@@ -566,6 +608,30 @@ fn curl_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value, Mar
         .map_err(|_| MarketAdapterError::InvalidResponse("data source response is not JSON".into()))
 }
 
+fn curl_text(url: &str) -> Result<String, MarketAdapterError> {
+    let output = Command::new("curl")
+        .args([
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "15",
+            url,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|_| {
+            MarketAdapterError::Unavailable("system HTTP transport is unavailable".into())
+        })?;
+    if !output.status.success() {
+        return Err(MarketAdapterError::Unavailable(
+            "data source request failed".into(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 fn to_tushare_code(security: &MarketSecurity) -> Result<String, MarketAdapterError> {
     let exchange = match security.market.as_str() {
         "SSE" | "SH" => "SH",
@@ -592,6 +658,20 @@ fn to_eastmoney_secid(security: &MarketSecurity) -> Result<String, MarketAdapter
     };
     validate_symbol(&security.symbol)?;
     Ok(format!("{exchange}.{}", security.symbol))
+}
+
+fn to_tencent_code(security: &MarketSecurity) -> Result<String, MarketAdapterError> {
+    let exchange = match security.market.as_str() {
+        "SSE" | "SH" => "sh",
+        "SZSE" | "SZ" => "sz",
+        _ => {
+            return Err(MarketAdapterError::InvalidResponse(
+                "unsupported security market".into(),
+            ))
+        }
+    };
+    validate_symbol(&security.symbol)?;
+    Ok(format!("{exchange}{}", security.symbol))
 }
 
 fn validate_symbol(symbol: &str) -> Result<(), MarketAdapterError> {
@@ -698,6 +778,76 @@ fn parse_eastmoney_quotes(
         })
         .collect();
     let quotes = quotes?;
+    (!quotes.is_empty())
+        .then_some(quotes)
+        .ok_or(MarketAdapterError::NoData)
+}
+
+fn parse_tencent_quotes(
+    payload: &str,
+    securities: &[MarketSecurity],
+) -> Result<Vec<RawMarketQuote>, MarketAdapterError> {
+    let by_symbol: HashMap<&str, &MarketSecurity> = securities
+        .iter()
+        .map(|security| (security.symbol.as_str(), security))
+        .collect();
+    let quotes = payload
+        .split(';')
+        .filter_map(|line| {
+            let value = line.split_once("=\"")?.1.strip_suffix('"')?;
+            (!value.trim().is_empty()).then_some(value)
+        })
+        .map(|value| {
+            let fields = value.split('~').collect::<Vec<_>>();
+            if fields.len() <= 37 {
+                return Err(MarketAdapterError::InvalidResponse(
+                    "Tencent quote response lacks required fields".into(),
+                ));
+            }
+            let symbol = fields[2];
+            let security = by_symbol.get(symbol).ok_or_else(|| {
+                MarketAdapterError::InvalidResponse("response has an unexpected symbol".into())
+            })?;
+            let timestamp = chrono::DateTime::parse_from_str(
+                &format!("{} +0800", fields[30]),
+                "%Y%m%d%H%M%S %z",
+            )
+            .map_err(|_| {
+                MarketAdapterError::InvalidResponse("Tencent quote timestamp is invalid".into())
+            })?
+            .with_timezone(&Utc);
+            let current_price = Decimal::from_str(fields[3]).map_err(|_| {
+                MarketAdapterError::InvalidResponse("Tencent current price is invalid".into())
+            })?;
+            let previous_close = Decimal::from_str(fields[4]).map_err(|_| {
+                MarketAdapterError::InvalidResponse("Tencent previous close is invalid".into())
+            })?;
+            let price_change = Decimal::from_str(fields[31]).map_err(|_| {
+                MarketAdapterError::InvalidResponse("Tencent price change is invalid".into())
+            })?;
+            let change_percent = Decimal::from_str(fields[32]).map_err(|_| {
+                MarketAdapterError::InvalidResponse("Tencent change percent is invalid".into())
+            })?;
+            let volume = Decimal::from_str(fields[6]).map_err(|_| {
+                MarketAdapterError::InvalidResponse("Tencent volume is invalid".into())
+            })?;
+            let turnover_amount = Decimal::from_str(fields[37]).map_err(|_| {
+                MarketAdapterError::InvalidResponse("Tencent turnover amount is invalid".into())
+            })?;
+            Ok(RawMarketQuote {
+                security: (*security).clone(),
+                current_price,
+                previous_close,
+                price_change,
+                change_percent,
+                volume,
+                volume_unit: "SOURCE_DECLARED".into(),
+                turnover_amount,
+                turnover_unit: "SOURCE_DECLARED".into(),
+                market_timestamp: timestamp,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     (!quotes.is_empty())
         .then_some(quotes)
         .ok_or(MarketAdapterError::NoData)
@@ -989,6 +1139,22 @@ mod tests {
     }
 
     #[test]
+    fn tencent_recorded_response_maps_to_canonical_quote() {
+        let response = "v_sh600519=\"1~ignored provider name~600519~1500.5~1490.5~1495~100~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~~20260808143000~10~0.67~1501~1490~0~100~0~150000\";";
+        let quotes = parse_tencent_quotes(response, &[security()]).unwrap();
+
+        assert_eq!(quotes.len(), 1);
+        assert_eq!(quotes[0].current_price, decimal("1500.5"));
+        assert_eq!(quotes[0].previous_close, decimal("1490.5"));
+        assert_eq!(quotes[0].price_change, decimal("10"));
+        assert_eq!(quotes[0].change_percent, decimal("0.67"));
+        assert_eq!(
+            quotes[0].market_timestamp,
+            Utc.with_ymd_and_hms(2026, 8, 8, 6, 30, 0).unwrap()
+        );
+    }
+
+    #[test]
     fn tushare_recorded_daily_response_maps_to_closed_quote_fields() {
         let response: Value = serde_json::from_str(
             r#"{"code":0,"data":{"fields":["ts_code","trade_date","close","pre_close","change","pct_chg","vol","amount"],"items":[["600519.SH","20260810",1500.5,1490.5,10,0.67,100,150000]]}}"#,
@@ -1004,12 +1170,5 @@ mod tests {
         assert_eq!(quotes[0].previous_close, decimal("1490.5"));
         assert_eq!(quotes[0].volume_unit, "LOTS");
         assert_eq!(quotes[0].turnover_unit, "THOUSAND_CNY");
-    }
-
-    #[test]
-    fn tushare_configuration_status_never_exposes_the_token() {
-        assert!(TushareAdapter::has_token(Some("runtime-secret")));
-        assert!(!TushareAdapter::has_token(Some("  ")));
-        assert!(!TushareAdapter::has_token(None));
     }
 }

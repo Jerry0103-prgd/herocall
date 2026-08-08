@@ -13,12 +13,27 @@ export type AssetSummary = {
 
 export type MarketRefresh = {
   source: string;
-  configurationStatus: "CONFIGURED" | "UNCONFIGURED";
+  configurationStatus: "CONFIGURED" | "UNCONFIGURED" | "PUBLIC_ONLY";
   status: "REALTIME" | "DELAYED" | "CLOSED" | "NO_DATA";
   quoteCount: number;
   marketTimestamp: string | null;
   fetchedAt: string;
   message: string | null;
+};
+
+export type SnapshotSection = {
+  source: string;
+  status: "REALTIME" | "DELAYED" | "CLOSED" | "NO_DATA";
+  itemCount: number;
+  updatedAt: string | null;
+  message: string | null;
+};
+
+export type ManualMarketSnapshot = {
+  holdings: MarketRefresh;
+  indices: SnapshotSection;
+  news: SnapshotSection;
+  events: SnapshotSection;
 };
 
 export type MarketIndexQuote = {
@@ -71,4 +86,8 @@ export function loadMarketSnapshot(): Promise<MarketIndexQuote[]> {
 
 export function refreshTushareMarketData(): Promise<MarketRefresh> {
   return invoke<MarketRefresh>("refresh_tushare_market_data");
+}
+
+export function refreshTodayMarketSnapshot(): Promise<ManualMarketSnapshot> {
+  return invoke<ManualMarketSnapshot>("refresh_today_market_snapshot");
 }

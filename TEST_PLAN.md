@@ -41,7 +41,7 @@
 21. AI Service 的 006 迁移、无完整运行时配置状态、Provider Adapter 契约、`FACTS`/`INFERENCES`/`RISKS` JSON 结构、持久化审计字段与禁止词拦截均须通过。AI 只接收已保存每日复盘（含快照）、Portfolio 和持仓关联资讯；UI 不能直接调用 Provider。任何输出包含买入、卖出、加减仓、推荐、目标价、收益预测/承诺、保证收益或必涨等内容时必须拒绝保存和展示。API Key 不得出现在进程参数、日志、SQLite、Command 返回值或前端。
 22. Event Service 的 007 迁移、事件 CRUD、六类事件类型、三种确认状态、带时区原始时间校验、状态过滤、持仓关联和日期排序均须通过。默认查询必须让当前持仓关联事件优先，随后按实际事件时间升序排列；宏观/FED 事件可不关联证券。事件页面仅通过 Rust Command 读取数据，空态显示“暂无事件”；不得自动推测事件日期、来源或确认状态。
 23. 首次启动时 `get_initialization_status` 返回未完成并展示初始化向导；每一步可跳过。录入的 CNY 现金和初始持仓只通过既有 Rust Command 保存，数据源步骤只显示安全配置状态。完成后持久化非敏感标志，重启并重新打开同一 SQLite 数据库时不再展示向导；不得在 `app_settings`、前端或日志中保存 API Key、Token 或券商凭据。
-24. `refresh_tushare_market_data` 仅刷新当前持仓并通过 Tushare Adapter 保存规范化日线快照。测试必须验证价格、昨收、涨跌、成交、来源、行情时间、抓取时间及 `CLOSED` 状态均可读取；缺少 `TUSHARE_TOKEN` 时返回 `UNCONFIGURED` / `NO_DATA`，持久化安全数据源状态但不产生报价或发起备用行情请求。Dashboard 只能用有效快照、Portfolio Service 和现金账户在 Rust 中计算总资产、证券资产、现金、今日盈亏、总盈亏及收益率；任一持仓缺报价或存在已确认交易但没有完整已实现盈亏输入时必须显示“暂无数据”。
+24. `refresh_today_market_snapshot` 只能由用户点击触发一次，不得存在定时器、轮询、常驻连接或高频请求。它以 Adapter 优先级保存当前持仓和四个主要指数的来源、价格、昨收、涨跌、成交、行情时间、抓取时间与状态：Tushare 仅在 Keychain Token 已配置时作为可选增强日线源（`CLOSED`），东方财富/腾讯公开行情必须标记 `DELAYED`。任一源失败时允许显式回退，最终 `NO_DATA` 不得生成价格。新闻、事件 Adapter 未配置时必须报告 `NO_DATA`，不得写入虚构内容。Dashboard 每张指数卡必须显示最后更新时间、数据来源与行情状态；复盘/AI 只读取已保存的本次结构化快照，不重新请求行情。Dashboard 只能用有效快照、Portfolio Service 和现金账户在 Rust 中计算总资产、证券资产、现金、今日盈亏、总盈亏及收益率；任一持仓缺报价或存在已确认交易但没有完整已实现盈亏输入时必须显示“暂无数据”。
 
 ## 4. 质量门禁
 
