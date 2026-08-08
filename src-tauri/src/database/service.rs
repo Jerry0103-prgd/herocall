@@ -186,13 +186,19 @@ impl DatabaseService {
     }
 
     pub fn initialize_app_database(app: &tauri::AppHandle) -> DatabaseResult<()> {
+        Self::open_app_database(app)?;
+        Ok(())
+    }
+
+    /// Opens the application database at the same local path used during application startup.
+    /// Application services use this boundary; Tauri commands never expose SQLite to the UI.
+    pub fn open_app_database(app: &tauri::AppHandle) -> DatabaseResult<Self> {
         let app_data_dir = app
             .path()
             .app_data_dir()
             .map_err(|error| DatabaseError::AppPath(error.to_string()))?;
         fs::create_dir_all(&app_data_dir)?;
-        Self::open(app_data_dir.join("astock-ai-workbench.sqlite3"))?;
-        Ok(())
+        Self::open(app_data_dir.join("astock-ai-workbench.sqlite3"))
     }
 
     pub fn create_security(&self, input: NewSecurity) -> DatabaseResult<Security> {

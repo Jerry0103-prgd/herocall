@@ -1,20 +1,28 @@
+import { useState } from "react";
+
+import { Sidebar, type PageId } from "./components/Sidebar";
+import { ComingSoonPage } from "./pages/ComingSoonPage";
+import { DashboardPage } from "./pages/DashboardPage";
+
+const pageTitles: Record<Exclude<PageId, "dashboard">, string> = {
+  news: "财经资讯",
+  review: "仓位复盘",
+  holdings: "我的持仓",
+  calendar: "事件日历",
+  settings: "设置",
+};
+
 function App() {
+  const [activePage, setActivePage] = useState<PageId>("dashboard");
+
   return (
     <main className="app-shell">
-      <section className="status-card" aria-labelledby="app-title">
-        <p className="eyebrow">AStock AI Workbench</p>
-        <h1 id="app-title">A股个人AI投研工作台</h1>
-        <dl>
-          <div>
-            <dt>版本</dt>
-            <dd>v0.1.0</dd>
-          </div>
-          <div>
-            <dt>当前状态</dt>
-            <dd>工程初始化完成</dd>
-          </div>
-        </dl>
-      </section>
+      <Sidebar activePage={activePage} onNavigate={setActivePage} />
+      {activePage === "dashboard" ? (
+        <DashboardPage />
+      ) : (
+        <ComingSoonPage title={pageTitles[activePage]} />
+      )}
     </main>
   );
 }

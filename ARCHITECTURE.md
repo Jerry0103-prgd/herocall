@@ -7,9 +7,9 @@
 ## 2. 分层
 
 ```text
-React/TypeScript UI
+React/TypeScript UI（侧栏、Dashboard 页面）
   └─ Tauri command / event 边界
-       └─ Rust application services
+       └─ Rust application services（含只读 Dashboard 查询服务）
             ├─ Domain：持仓、交易、T+1、盈亏、复盘规则
             ├─ Ports：行情/资讯/公告/事件/AI 的抽象接口
             └─ Infrastructure：SQLite repositories、Provider Adapters、密钥存储
@@ -29,6 +29,8 @@ React/TypeScript UI
 | Information | 新闻、公告、社区内容与证券关联 | 原文链接可追溯；社区内容非事实 |
 | Calendar | 公司和宏观事件 | 类型、日期、来源、确认状态均需保留 |
 | Review AI | 证据选择、结构化生成、人工复盘保存 | 强制 FACTS/INFERENCES/RISKS；不得提供交易承诺 |
+
+Phase 5-A 的 Dashboard 通过 `get_asset_summary` 与 `get_market_snapshot` 两个 Tauri Command 读取 Rust 只读服务。当前报告聚合和指数持久化尚未实现，因此 Command 返回 `null` / `NO_DATA`，界面必须显示“暂无数据”，不得将缺失数据替换为零或演示价格。
 
 ## 4. 数据流与质量控制
 
