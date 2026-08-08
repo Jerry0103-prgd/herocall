@@ -4,6 +4,7 @@ import { Sidebar, type PageId } from "./components/Sidebar";
 import { ComingSoonPage } from "./pages/ComingSoonPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
+import { SettingsPage } from "./pages/SettingsPage";
 
 const pageTitles: Record<Exclude<PageId, "dashboard">, string> = {
   news: "财经资讯",
@@ -21,7 +22,8 @@ function App() {
       <Sidebar activePage={activePage} onNavigate={setActivePage} />
       {activePage === "dashboard" ? <DashboardPage /> : null}
       {activePage === "holdings" ? <PortfolioPage /> : null}
-      {activePage !== "dashboard" && activePage !== "holdings" ? <ComingSoonPage title={pageTitles[activePage]} /> : null}
+      {activePage === "settings" ? <SettingsPage /> : null}
+      {activePage !== "dashboard" && activePage !== "holdings" && activePage !== "settings" ? <ComingSoonPage title={pageTitles[activePage]} /> : null}
     </main>
   );
 }

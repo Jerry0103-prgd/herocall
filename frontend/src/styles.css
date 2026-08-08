@@ -101,7 +101,30 @@ tbody tr:hover { background: #142138; }
 .primary-button:disabled { opacity: .65; cursor: wait; }
 .secondary-button { border: 1px solid #3b4a61; background: transparent; color: #c4d0de; }
 
+.settings-page { background: radial-gradient(circle at 84% 0%, #17334b 0, transparent 34%), #0d1727; }
+.settings-section { margin-bottom: 36px; }
+.settings-card, .cash-account-form { border: 1px solid #263650; border-radius: 12px; background: rgb(15 27 45 / 88%); box-shadow: 0 12px 35px rgb(0 0 0 / 12%); }
+.settings-config-card, .backup-card { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 20px; }
+.settings-card strong { display: block; color: #ebf2fa; }
+.settings-card p { margin: 7px 0 0; color: #8494aa; font-size: 12px; line-height: 1.6; }
+.settings-status { flex: 0 0 auto; padding: 6px 10px; border: 1px solid #56647a; border-radius: 999px; color: #bac7d6; font-size: 12px; }
+.settings-status.is-configured { border-color: #4cae91; color: #80e0bc; }
+.cash-account-form { margin: 0 0 14px; padding: 24px; }
+.cash-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.cash-accounts-card { overflow: hidden; }
+.cash-account-list { display: grid; }
+.cash-account-row { display: grid; grid-template-columns: minmax(0, 1fr) 90px 160px; gap: 16px; align-items: center; padding: 15px 18px; border-bottom: 1px solid #233149; color: #cfd9e7; font-size: 13px; }
+.cash-account-row:last-child { border-bottom: 0; }
+.cash-account-row > span:nth-child(2) { color: #8596ad; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.cash-account-row strong { text-align: right; }
+.system-status-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.system-status-grid .settings-card { min-height: 104px; padding: 19px; }
+.system-status-grid span { display: block; margin-bottom: 18px; color: #8394ab; font-size: 12px; }
+.system-status-grid strong { font-size: 16px; word-break: break-word; }
+.backup-card .secondary-button:disabled { cursor: wait; opacity: .65; }
+
 @media (max-width: 1050px) {
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .system-status-grid { grid-template-columns: 1fr; }
 }

@@ -7,7 +7,7 @@
 ## 2. 分层
 
 ```text
-React/TypeScript UI（侧栏、Dashboard、Portfolio 页面）
+React/TypeScript UI（侧栏、Dashboard、Portfolio、Settings 页面）
   └─ Tauri command / event 边界
        └─ Rust application services（含只读 Dashboard 查询服务）
             ├─ Domain：持仓、交易、T+1、盈亏、复盘规则
@@ -33,6 +33,8 @@ React/TypeScript UI（侧栏、Dashboard、Portfolio 页面）
 Phase 5-A 的 Dashboard 通过 `get_asset_summary` 与 `get_market_snapshot` 两个 Tauri Command 读取 Rust 只读服务。当前报告聚合和指数持久化尚未实现，因此 Command 返回 `null` / `NO_DATA`，界面必须显示“暂无数据”，不得将缺失数据替换为零或演示价格。
 
 Phase 5-B 的 Portfolio 页面通过 `get_portfolio_holdings`、`create_portfolio_holding`、`update_portfolio_holding` 与 `delete_portfolio_holding` Command 访问 Rust 应用服务。前端不得计算成本金额、市值、今日盈亏或总盈亏；Rust 使用 Portfolio Service 的精确 decimal 计算及 Market Service 的有效行情状态判断。没有可验证行情时，相关字段为“暂无数据”。
+
+Phase 5-C 的 Settings 页面通过 `get_settings_status`、`get_cash_accounts`、`create_cash_account` 和 `create_database_backup` Command 访问 `settings_service`。Tushare Token 仅从运行时 `TUSHARE_TOKEN` 读取，服务只返回“已配置/未配置”，不保存、不回传、不记录 Token。现金账户仅支持用户手工维护的 `CNY` 记账余额。备份由 SQLite `VACUUM INTO` 生成一致性副本，写入系统 Documents 下的 `AStock-AI-Workbench/backups`，且绝不覆盖同名文件。
 
 ## 4. 数据流与质量控制
 

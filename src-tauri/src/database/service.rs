@@ -93,6 +93,13 @@ pub struct NewCashAccount {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketSourceStatus {
+    pub name: String,
+    pub status: String,
+    pub last_success_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Holding {
     pub id: i64,
     pub cash_account_id: i64,
@@ -262,6 +269,79 @@ impl DatabaseService {
             ],
         )?;
         self.get_cash_account(self.connection.last_insert_rowid())
+    }
+
+    pub fn list_cash_accounts(&self) -> DatabaseResult<Vec<CashAccount>> {
+        let mut statement = self.connection.prepare(
+            "
+            SELECT id, name, currency, available_to_buy, withdrawable_cash, pending_settlement
+            FROM cash_accounts
+            ORDER BY id ASC
+            ",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(CashAccount {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                currency: row.get(2)?,
+                available_to_buy: row.get(3)?,
+                withdrawable_cash: row.get(4)?,
+                pending_settlement: row.get(5)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn next_cny_cash_account_name(&self) -> DatabaseResult<String> {
+        let count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM cash_accounts WHERE name LIKE '人民币现金账户%'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(format!("人民币现金账户-{}", count + 1))
+    }
+
+    pub fn latest_market_source_status(&self) -> DatabaseResult<Option<MarketSourceStatus>> {
+        self.connection
+            .query_row(
+                "
+                SELECT name, status, last_success_at
+                FROM data_sources
+                WHERE source_type = 'MARKET'
+                ORDER BY
+                    CASE WHEN last_success_at IS NULL THEN 1 ELSE 0 END,
+                    last_success_at DESC,
+                    id DESC
+                LIMIT 1
+                ",
+                [],
+                |row| {
+                    Ok(MarketSourceStatus {
+                        name: row.get(0)?,
+                        status: row.get(1)?,
+                        last_success_at: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// Produces a consistent SQLite copy through SQLite itself. The caller must provide a unique
+    /// destination; existing backups are never overwritten.
+    pub fn backup_to(&self, destination: &Path) -> DatabaseResult<()> {
+        if destination.exists() {
+            return Err(DatabaseError::Io(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "backup destination already exists",
+            )));
+        }
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        self.connection
+            .execute("VACUUM INTO ?1", [destination.to_string_lossy().as_ref()])?;
+        Ok(())
     }
 
     pub fn create_holding(&self, input: NewHolding) -> DatabaseResult<Holding> {
