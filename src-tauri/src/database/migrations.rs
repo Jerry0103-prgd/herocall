@@ -59,9 +59,18 @@ const MIGRATIONS: &[Migration] = &[
         checksum: "ai-core-010-v1",
         sql: include_str!("../../migrations/010_ai_core.sql"),
     },
+    Migration {
+        version: "011",
+        checksum: "market-index-change-percent-011-v1",
+        sql: include_str!("../../migrations/011_market_index_change_percent.sql"),
+    },
 ];
 
 pub(super) fn apply(connection: &mut Connection) -> DatabaseResult<()> {
+    apply_migrations(connection, MIGRATIONS)
+}
+
+fn apply_migrations(connection: &mut Connection, migrations: &[Migration]) -> DatabaseResult<()> {
     connection.execute_batch(
         "
         PRAGMA foreign_keys = ON;
@@ -73,7 +82,7 @@ pub(super) fn apply(connection: &mut Connection) -> DatabaseResult<()> {
         ",
     )?;
 
-    for migration in MIGRATIONS {
+    for migration in migrations {
         let applied_checksum: Option<String> = connection
             .query_row(
                 "SELECT checksum FROM schema_migrations WHERE version = ?1",
@@ -106,20 +115,10 @@ pub(super) fn apply(connection: &mut Connection) -> DatabaseResult<()> {
 
 #[cfg(test)]
 pub(super) fn apply_001_for_upgrade_test(connection: &mut Connection) -> DatabaseResult<()> {
-    connection.execute_batch(
-        "
-        PRAGMA foreign_keys = ON;
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-            version TEXT PRIMARY KEY,
-            checksum TEXT NOT NULL,
-            applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-        );
-        ",
-    )?;
-    connection.execute_batch(MIGRATIONS[0].sql)?;
-    connection.execute(
-        "INSERT INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
-        [MIGRATIONS[0].version, MIGRATIONS[0].checksum],
-    )?;
-    Ok(())
+    apply_migrations(connection, &MIGRATIONS[..1])
+}
+
+#[cfg(test)]
+pub(super) fn apply_010_for_upgrade_test(connection: &mut Connection) -> DatabaseResult<()> {
+    apply_migrations(connection, &MIGRATIONS[..10])
 }

@@ -1670,13 +1670,14 @@ impl DatabaseService {
             self.connection.execute(
                 "
                 INSERT INTO market_index_quotes (
-                    market_snapshot_id, name, symbol, current_price, change_pct,
+                    market_snapshot_id, name, symbol, current_price, change_pct, change_percent,
                     market_timestamp, fetched_at, delay_status
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                 ON CONFLICT(market_snapshot_id, symbol) DO UPDATE SET
                     name = excluded.name,
                     current_price = excluded.current_price,
                     change_pct = excluded.change_pct,
+                    change_percent = excluded.change_percent,
                     market_timestamp = excluded.market_timestamp,
                     fetched_at = excluded.fetched_at,
                     delay_status = excluded.delay_status
@@ -1686,6 +1687,7 @@ impl DatabaseService {
                     &quote.name,
                     &quote.symbol,
                     quote.current_price.to_string(),
+                    quote.change_percent.to_string(),
                     quote.change_percent.to_string(),
                     quote.market_timestamp.to_rfc3339(),
                     quote.fetched_at.to_rfc3339(),
@@ -1739,10 +1741,16 @@ impl DatabaseService {
             return Ok(Vec::new());
         };
         let mut statement = self.connection.prepare(
-            "SELECT symbol, name, CASE WHEN symbol LIKE '%.SH' THEN 'SSE' ELSE 'SZSE' END,
-                    current_price, '0', '0', COALESCE(change_percent, '0'), '0', '0',
-                    updated_at, updated_at, source, status
-             FROM market_index_quotes WHERE market_snapshot_id = ?1 ORDER BY symbol",
+            "SELECT miq.symbol, miq.name,
+                    CASE WHEN miq.symbol LIKE '%.SH' THEN 'SSE' ELSE 'SZSE' END,
+                    miq.current_price, '0', '0',
+                    COALESCE(miq.change_percent, miq.change_pct, '0'), '0', '0',
+                    miq.market_timestamp, miq.fetched_at, ds.name, miq.delay_status
+             FROM market_index_quotes miq
+             JOIN market_snapshots ms ON ms.id = miq.market_snapshot_id
+             JOIN data_sources ds ON ds.id = ms.data_source_id
+             WHERE miq.market_snapshot_id = ?1
+             ORDER BY miq.symbol",
         )?;
         let records = statement
             .query_map([snapshot_id], |row| {
@@ -1829,7 +1837,7 @@ mod tests {
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 10);
+        assert_eq!(migration_count, 11);
         assert_eq!(table_count, 15);
     }
 
@@ -2042,7 +2050,7 @@ mod tests {
             )
             .expect("verify AI provider column");
 
-        assert_eq!(migration_count, 10);
+        assert_eq!(migration_count, 11);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -2062,6 +2070,65 @@ mod tests {
         assert_eq!(ai_contexts_exists, 1);
         assert_eq!(ai_review_provider_column, 1);
         assert_eq!(market_index_quotes_exists, 1);
+    }
+
+    #[test]
+    fn migration_011_backfills_index_change_percent_without_losing_quotes() {
+        let mut connection = Connection::open_in_memory().expect("create pre-011 database");
+        migrations::apply_010_for_upgrade_test(&mut connection).expect("apply through 010");
+        connection
+            .execute(
+                "INSERT INTO data_sources (name, source_type, priority, base_url)
+             VALUES ('Legacy index source', 'MARKET', 2, 'https://test.invalid')",
+                [],
+            )
+            .expect("insert source");
+        let source_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                "INSERT INTO market_snapshots (
+                data_source_id, snapshot_kind, market_timestamp, fetched_at, delay_status
+             ) VALUES (?1, 'INDICES', '2026-08-08T08:00:00Z', '2026-08-08T08:01:00Z', 'DELAYED')",
+                [source_id],
+            )
+            .expect("insert snapshot");
+        let snapshot_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                "INSERT INTO market_index_quotes (
+                market_snapshot_id, name, symbol, current_price, change_pct,
+                market_timestamp, fetched_at, delay_status
+             ) VALUES (?1, '上证指数', '000001.SH', '3500.00', '1.25',
+                '2026-08-08T08:00:00Z', '2026-08-08T08:01:00Z', 'DELAYED')",
+                [snapshot_id],
+            )
+            .expect("insert legacy index quote");
+
+        migrations::apply(&mut connection).expect("upgrade through 011");
+        migrations::apply(&mut connection).expect("reapply is idempotent");
+
+        let quote: (String, String, String) = connection.query_row(
+            "SELECT symbol, change_pct, change_percent FROM market_index_quotes WHERE market_snapshot_id = ?1",
+            [snapshot_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).expect("query upgraded index quote");
+        let migration_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .expect("read migration count");
+        assert_eq!(quote, ("000001.SH".into(), "1.25".into(), "1.25".into()));
+        assert_eq!(migration_count, 11);
+
+        let database = DatabaseService { connection };
+        let records = database
+            .list_market_index_quotes_for_snapshot(Some(snapshot_id))
+            .expect("query upgraded index quote through database service");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].symbol, "000001.SH");
+        assert_eq!(records[0].change_percent, "1.25");
+        assert_eq!(records[0].source, "Legacy index source");
+        assert_eq!(records[0].delay_status, "DELAYED");
     }
 
     #[test]

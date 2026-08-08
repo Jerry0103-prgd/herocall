@@ -488,18 +488,61 @@ mod tests {
     use super::*;
     use crate::{
         database::service::{NewDailyReview, NewManualRefreshRun},
+        market_service::{
+            DataSourcePriority, MarketDataSource, MarketQuote, MarketSnapshot, MarketStatus,
+            SourceClass,
+        },
         review_service::{
             ReviewHoldingSummary, ReviewMarketSummary, ReviewPortfolioSummary, ReviewRiskSummary,
         },
     };
+    use chrono::{TimeZone, Utc};
+    use rust_decimal::Decimal;
 
     fn stored_review_and_snapshot(database: &DatabaseService) -> DailyReviewView {
+        let market_timestamp = Utc.with_ymd_and_hms(2026, 8, 8, 8, 0, 0).unwrap();
+        let fetched_at = Utc.with_ymd_and_hms(2026, 8, 8, 8, 1, 0).unwrap();
+        let source = MarketDataSource {
+            name: "Recorded index source".into(),
+            base_url: "https://test.invalid/indices".into(),
+            priority: DataSourcePriority::PublicQuote,
+            source_class: SourceClass::PublicQuote,
+        };
+        let index_snapshot = MarketSnapshot {
+            source: source.clone(),
+            market_timestamp: Some(market_timestamp),
+            fetched_at,
+            delay_status: MarketStatus::Delayed,
+            quotes: vec![MarketQuote {
+                security_id: -1,
+                symbol: "000001.SH".into(),
+                name: "上证指数".into(),
+                market: "SSE".into(),
+                current_price: Decimal::new(350_000, 2),
+                previous_close: Decimal::new(349_000, 2),
+                price_change: Decimal::new(1_000, 2),
+                change_percent: Decimal::new(29, 2),
+                volume: Decimal::ZERO,
+                volume_unit: "UNKNOWN".into(),
+                turnover_amount: Decimal::ZERO,
+                turnover_unit: "UNKNOWN".into(),
+                market_timestamp,
+                fetched_at,
+                source: source.name.clone(),
+                delay_status: MarketStatus::Delayed,
+            }],
+            unavailable_reason: None,
+        };
+        let indices_snapshot_id = database
+            .save_market_index_snapshot_with_id(&index_snapshot)
+            .unwrap()
+            .expect("index snapshot has a market timestamp");
         let run = database
             .create_manual_refresh_run(NewManualRefreshRun {
                 started_at: "2026-08-08T08:00:00Z".into(),
                 completed_at: "2026-08-08T08:01:00Z".into(),
                 holdings_snapshot_id: None,
-                indices_snapshot_id: None,
+                indices_snapshot_id: Some(indices_snapshot_id),
                 portfolio_json: "[]".into(),
                 status: "NO_DATA".into(),
             })
@@ -543,6 +586,9 @@ mod tests {
             assert_eq!(input.manual_refresh_run_id, 1);
             assert_eq!(input.news["status"], "NO_DATA");
             assert_eq!(input.events["status"], "NO_DATA");
+            assert_eq!(input.market["indices"].as_array().map(Vec::len), Some(1));
+            assert_eq!(input.market["indices"][0]["symbol"], "000001.SH");
+            assert_eq!(input.market["indices"][0]["changePercent"], "0.29");
             Ok(AiReviewSections {
                 facts: vec!["当日市场快照暂无数据。".into()],
                 inferences: vec!["基于已保存复盘，账户汇总数据尚未完整。".into()],
