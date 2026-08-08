@@ -103,7 +103,7 @@ export function ReviewPage() {
       </div> : null}
 
       <section className="review-section ai-review-section" aria-labelledby="ai-review-title">
-        <div className="section-heading"><div><p className="section-kicker">AI assistance</p><h2 id="ai-review-title">AI复盘</h2></div>{aiStatus?.configured && review ? <button className="secondary-button" disabled={isAiGenerating} onClick={() => void generateAi()} type="button">{isAiGenerating ? "正在生成…" : "生成AI辅助分析"}</button> : null}</div>
+        <div className="section-heading"><div><p className="section-kicker">AI assistance</p><h2 id="ai-review-title">AI复盘</h2></div>{aiStatus?.configured && review ? <button className="secondary-button" disabled={isAiGenerating} onClick={() => void generateAi()} type="button">{isAiGenerating ? "正在生成…" : "生成AI复盘"}</button> : null}</div>
         {!aiStatus ? <div className="settings-card ai-empty-state">AI服务状态暂不可用</div> : null}
         {aiStatus && !aiStatus.configured ? <div className="settings-card ai-empty-state">AI服务未配置</div> : null}
         {aiStatus?.configured && !review ? <div className="settings-card ai-empty-state">请先生成当日结构化复盘</div> : null}

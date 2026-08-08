@@ -28,8 +28,10 @@ use portfolio_ui_service::{
 };
 use review_service::{DailyReviewView, ReviewService};
 use secure_storage::{
-    get_tushare_status as load_tushare_status, remove_tushare_token as delete_tushare_token,
-    save_tushare_token as store_tushare_token, TushareStatusView,
+    get_deepseek_status as load_deepseek_status, get_tushare_status as load_tushare_status,
+    remove_deepseek_api_key as delete_deepseek_api_key,
+    remove_tushare_token as delete_tushare_token, save_deepseek_api_key as store_deepseek_api_key,
+    save_tushare_token as store_tushare_token, DeepSeekStatusView, TushareStatusView,
 };
 use settings_service::{
     BackupView, CashAccountView, CreateCashAccountInput, SettingsService, SettingsStatusView,
@@ -124,6 +126,22 @@ fn remove_tushare_token() -> Result<TushareStatusView, String> {
 #[tauri::command]
 fn get_tushare_status() -> Result<TushareStatusView, String> {
     load_tushare_status().map_err(|error| error.to_string())
+}
+
+/// DeepSeek credentials use macOS Keychain and only the configured state crosses IPC.
+#[tauri::command]
+fn save_deepseek_api_key(key: String) -> Result<DeepSeekStatusView, String> {
+    store_deepseek_api_key(&key).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_deepseek_api_key() -> Result<DeepSeekStatusView, String> {
+    delete_deepseek_api_key().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_deepseek_status() -> Result<DeepSeekStatusView, String> {
+    load_deepseek_status().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -240,6 +258,9 @@ pub fn run() {
             save_tushare_token,
             remove_tushare_token,
             get_tushare_status,
+            save_deepseek_api_key,
+            remove_deepseek_api_key,
+            get_deepseek_status,
             get_cash_accounts,
             create_cash_account,
             create_database_backup,

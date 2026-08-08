@@ -6,15 +6,16 @@
 
 use std::{error::Error, fmt};
 
+use chrono::Utc;
 use serde::Serialize;
 
 use crate::{
-    database::service::{DatabaseError, DatabaseService},
+    database::service::{DatabaseError, DatabaseService, NewManualRefreshRun},
     market_service::{
         EastmoneyAdapter, MarketDataAdapter, MarketFetchRequest, MarketPhase, MarketSecurity,
-        MarketService, MarketSnapshot, MarketSnapshotStore, MarketStoreError, TencentAdapter,
-        TushareAdapter,
+        MarketService, MarketSnapshot, MarketStoreError, TencentAdapter, TushareAdapter,
     },
+    portfolio_ui_service::{PortfolioUiError, PortfolioUiService},
 };
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -42,6 +43,7 @@ pub struct SnapshotSectionView {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ManualMarketSnapshotView {
+    pub run_id: i64,
     pub holdings: MarketRefreshView,
     pub indices: SnapshotSectionView,
     pub news: SnapshotSectionView,
@@ -52,6 +54,7 @@ pub struct ManualMarketSnapshotView {
 pub enum MarketRefreshError {
     Database(DatabaseError),
     Store(MarketStoreError),
+    Portfolio(PortfolioUiError),
 }
 
 impl fmt::Display for MarketRefreshError {
@@ -59,6 +62,7 @@ impl fmt::Display for MarketRefreshError {
         match self {
             Self::Database(error) => write!(formatter, "database error: {error}"),
             Self::Store(error) => write!(formatter, "market snapshot storage error: {error}"),
+            Self::Portfolio(error) => write!(formatter, "portfolio error: {error}"),
         }
     }
 }
@@ -77,6 +81,12 @@ impl From<MarketStoreError> for MarketRefreshError {
     }
 }
 
+impl From<PortfolioUiError> for MarketRefreshError {
+    fn from(error: PortfolioUiError) -> Self {
+        Self::Portfolio(error)
+    }
+}
+
 pub struct MarketRefreshService;
 
 impl MarketRefreshService {
@@ -85,12 +95,17 @@ impl MarketRefreshService {
     pub fn refresh_today_snapshot(
         database: &DatabaseService,
     ) -> Result<ManualMarketSnapshotView, MarketRefreshError> {
+        let started_at = Utc::now().to_rfc3339();
+        // Freeze the portfolio at the same user-initiated boundary as the market snapshots.
+        // Later UI changes must not silently affect a generated AI review.
+        let portfolio_json = serde_json::to_string(&PortfolioUiService::list(database)?)
+            .map_err(|_| DatabaseError::AppPath("无法冻结本次持仓快照".into()))?;
         let holdings = database.list_market_securities_for_holdings()?;
         let holding_snapshot = Self::fetch_holding_snapshot(&holdings);
-        database.save_market_snapshot(&holding_snapshot)?;
+        let holdings_snapshot_id = database.save_market_snapshot_with_id(&holding_snapshot)?;
 
         let index_snapshot = Self::fetch_index_snapshot();
-        database.save_market_index_snapshot(&index_snapshot)?;
+        let indices_snapshot_id = database.save_market_index_snapshot_with_id(&index_snapshot)?;
 
         let holding_configuration = if TushareAdapter::is_configured() {
             "CONFIGURED"
@@ -109,7 +124,21 @@ impl MarketRefreshService {
             updated_at: None,
             message: Some(message.into()),
         };
+        let run = database.create_manual_refresh_run(NewManualRefreshRun {
+            started_at,
+            completed_at: Utc::now().to_rfc3339(),
+            holdings_snapshot_id,
+            indices_snapshot_id,
+            portfolio_json,
+            status: if holdings_snapshot_id.is_some() || indices_snapshot_id.is_some() {
+                "COMPLETED"
+            } else {
+                "NO_DATA"
+            }
+            .into(),
+        })?;
         Ok(ManualMarketSnapshotView {
+            run_id: run.id,
             holdings: holdings_view,
             indices: indices_view,
             news: no_adapter("新闻数据 Adapter 尚未配置；本次未保存新闻。"),

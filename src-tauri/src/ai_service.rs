@@ -1,11 +1,9 @@
-//! Provider-backed, safety-constrained AI explanation for a saved daily review.
+//! Safety-constrained DeepSeek explanations for one saved manual market snapshot.
 //!
-//! The UI never contacts a model directly. Runtime secrets are read only from environment
-//! variables, provider output is structurally validated before persistence, and prohibited
-//! investment language is rejected rather than shown to the user.
+//! The UI never contacts a provider. A successful response is validated before either the
+//! immutable context or output is persisted; failed, malformed, or unsafe responses are not kept.
 
 use std::{
-    env,
     error::Error,
     fmt, fs,
     io::Write,
@@ -17,13 +15,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
-    database::service::{AiReview, DatabaseError, DatabaseService, NewAiReview},
-    news_service::{NewsArticleView, NewsService, NewsServiceError},
-    portfolio_ui_service::{PortfolioHoldingView, PortfolioUiError, PortfolioUiService},
+    database::service::{
+        AiReview, DatabaseError, DatabaseService, NewAiReview, NewAiReviewContext,
+    },
     review_service::{DailyReviewView, ReviewService, ReviewServiceError},
+    secure_storage::{get_deepseek_status, load_deepseek_api_key_for_adapter},
 };
 
-const PROMPT_VERSION: &str = "ai-review-v1";
+const PROMPT_VERSION: &str = "deepseek-review-v1";
+const DEEPSEEK_CHAT_COMPLETIONS_URL: &str = "https://api.deepseek.com/chat/completions";
+const DEEPSEEK_MODEL: &str = "deepseek-chat";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -53,17 +54,25 @@ pub struct AiReviewView {
     pub created_at: String,
 }
 
+/// This is the exact frozen input boundary sent to DeepSeek. News and events are explicit NO_DATA
+/// objects in E1; no provider is allowed to silently supplement those fields.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiReviewInput {
     pub prompt_version: String,
+    pub manual_refresh_run_id: i64,
     pub daily_review: DailyReviewView,
-    pub portfolio: Vec<PortfolioHoldingView>,
-    pub holding_news: Vec<NewsArticleView>,
+    pub portfolio: Value,
+    pub market: Value,
+    pub news: Value,
+    pub events: Value,
 }
 
 pub trait AiProviderAdapter {
     fn model(&self) -> &str;
+    fn provider(&self) -> &str {
+        "TEST"
+    }
     fn generate(&self, input: &AiReviewInput) -> Result<AiReviewSections, AiProviderError>;
 }
 
@@ -71,108 +80,62 @@ pub trait AiProviderAdapter {
 pub struct AiProviderError {
     message: &'static str,
 }
-
 impl AiProviderError {
     fn unavailable() -> Self {
         Self {
             message: "AI Provider 暂不可用",
         }
     }
-
     fn invalid_response() -> Self {
         Self {
             message: "AI Provider 返回格式无效",
         }
     }
 }
-
 impl fmt::Display for AiProviderError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.message)
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.message)
     }
 }
-
 impl Error for AiProviderError {}
 
-#[derive(Clone)]
-struct AiRuntimeConfig {
+/// DeepSeek's OpenAI-compatible non-streaming Chat Completions endpoint. The Keychain value is
+/// only held in this Rust adapter and is passed to curl via stdin, never as an argument or log.
+pub struct DeepSeekProviderAdapter {
     api_key: String,
-    base_url: String,
-    model: String,
 }
-
-impl AiRuntimeConfig {
-    fn from_environment() -> Option<Self> {
-        let api_key = env::var("AI_API_KEY")
-            .ok()
-            .or_else(|| env::var("OPENAI_API_KEY").ok());
-        Self::from_values(
-            api_key.as_deref(),
-            env::var("AI_BASE_URL").ok().as_deref(),
-            env::var("AI_MODEL").ok().as_deref(),
+impl DeepSeekProviderAdapter {
+    fn from_keychain() -> Result<Self, AiServiceError> {
+        Self::from_key(
+            load_deepseek_api_key_for_adapter().map_err(|_| AiServiceError::NotConfigured)?,
         )
     }
-
-    fn from_values(
-        api_key: Option<&str>,
-        base_url: Option<&str>,
-        model: Option<&str>,
-    ) -> Option<Self> {
-        let api_key = non_empty(api_key?)?;
-        let base_url = non_empty(base_url?)?;
-        let model = non_empty(model?)?;
-        if !base_url.starts_with("https://")
-            || [api_key, base_url, model]
-                .iter()
-                .any(|value| value.chars().any(char::is_control))
-        {
-            return None;
-        }
-        Some(Self {
-            api_key: api_key.into(),
-            base_url: base_url.into(),
-            model: model.into(),
-        })
+    fn from_key(key: Option<String>) -> Result<Self, AiServiceError> {
+        key.filter(|value| !value.trim().is_empty())
+            .map(|api_key| Self { api_key })
+            .ok_or(AiServiceError::NotConfigured)
     }
 }
-
-fn non_empty(value: &str) -> Option<&str> {
-    let value = value.trim();
-    (!value.is_empty()).then_some(value)
-}
-
-/// OpenAI-compatible Chat Completions adapter. The curl configuration (including the Authorization
-/// header) is passed through stdin, so the key never appears in a process argument or diagnostic.
-pub struct OpenAiCompatibleAdapter {
-    config: AiRuntimeConfig,
-}
-
-impl OpenAiCompatibleAdapter {
-    fn from_runtime() -> Option<Self> {
-        AiRuntimeConfig::from_environment().map(|config| Self { config })
-    }
-}
-
-impl AiProviderAdapter for OpenAiCompatibleAdapter {
+impl AiProviderAdapter for DeepSeekProviderAdapter {
     fn model(&self) -> &str {
-        &self.config.model
+        DEEPSEEK_MODEL
     }
-
+    fn provider(&self) -> &str {
+        "DEEPSEEK"
+    }
     fn generate(&self, input: &AiReviewInput) -> Result<AiReviewSections, AiProviderError> {
         let prompt = serde_json::to_string(input).map_err(|_| AiProviderError::unavailable())?;
         let response = curl_ai_request(
-            &self.config.base_url,
-            &self.config.api_key,
+            DEEPSEEK_CHAT_COMPLETIONS_URL,
+            &self.api_key,
             &json!({
-                "model": self.config.model,
+                "model": DEEPSEEK_MODEL,
+                "stream": false,
                 "temperature": 0,
                 "response_format": { "type": "json_object" },
                 "messages": [
-                    {
-                        "role": "system",
-                        "content": "你是A股个人投研工具的解释助手。仅基于提供的本地结构化数据，返回严格 JSON 对象：{\"facts\":[string],\"inferences\":[string],\"risks\":[string]}。facts 只能陈述输入中的客观事实；inferences 必须明确是基于 facts 的解释；risks 只能陈述风险、数据缺失或需要核验事项。禁止出现买入、卖出、加仓、减仓、建仓、清仓、推荐、目标价、收益预测、收益承诺、保证收益或必涨等内容。不得添加输入未支持的事实。"
-                    },
-                    { "role": "user", "content": prompt }
+                  { "role": "system", "content": "你是个人A股投研复盘的解释助手。仅依据输入 JSON，输出严格 JSON 对象：{\"facts\":[string],\"inferences\":[string],\"risks\":[string]}。FACTS 只陈述有来源和时间的输入事实；INFERENCES 必须是基于这些事实的解释；RISKS 只列不确定性、数据缺失或需核验事项。新闻和事件字段如果为 NO_DATA，必须承认暂无数据。社区观点不能作为事实。严禁买入、卖出、加仓、减仓、建仓、清仓、推荐、目标价、收益预测、收益承诺、保证收益、必涨，且不得补造事实。" },
+                  { "role": "user", "content": prompt }
                 ]
             }),
         )?;
@@ -188,116 +151,113 @@ impl AiProviderAdapter for OpenAiCompatibleAdapter {
 pub enum AiServiceError {
     Database(DatabaseError),
     Review(ReviewServiceError),
-    Portfolio(PortfolioUiError),
-    News(NewsServiceError),
     Provider(AiProviderError),
     Serialization(serde_json::Error),
     InvalidOutput(&'static str),
     NotConfigured,
+    NoManualSnapshot,
 }
-
 impl fmt::Display for AiServiceError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Database(error) => write!(formatter, "database error: {error}"),
-            Self::Review(error) => write!(formatter, "review error: {error}"),
-            Self::Portfolio(error) => write!(formatter, "portfolio error: {error}"),
-            Self::News(error) => write!(formatter, "news error: {error}"),
-            Self::Provider(error) => write!(formatter, "provider error: {error}"),
-            Self::Serialization(error) => {
-                write!(formatter, "AI review serialization error: {error}")
-            }
-            Self::InvalidOutput(message) => formatter.write_str(message),
-            Self::NotConfigured => formatter.write_str("AI服务未配置"),
+            Self::Database(e) => write!(f, "database error: {e}"),
+            Self::Review(e) => write!(f, "review error: {e}"),
+            Self::Provider(e) => write!(f, "provider error: {e}"),
+            Self::Serialization(e) => write!(f, "AI review serialization error: {e}"),
+            Self::InvalidOutput(m) => f.write_str(m),
+            Self::NotConfigured => f.write_str("AI服务未配置"),
+            Self::NoManualSnapshot => f.write_str("请先更新今日市场快照"),
         }
     }
 }
-
 impl Error for AiServiceError {}
-
 impl From<DatabaseError> for AiServiceError {
-    fn from(error: DatabaseError) -> Self {
-        Self::Database(error)
+    fn from(e: DatabaseError) -> Self {
+        Self::Database(e)
     }
 }
-
 impl From<ReviewServiceError> for AiServiceError {
-    fn from(error: ReviewServiceError) -> Self {
-        Self::Review(error)
+    fn from(e: ReviewServiceError) -> Self {
+        Self::Review(e)
     }
 }
-
-impl From<PortfolioUiError> for AiServiceError {
-    fn from(error: PortfolioUiError) -> Self {
-        Self::Portfolio(error)
-    }
-}
-
-impl From<NewsServiceError> for AiServiceError {
-    fn from(error: NewsServiceError) -> Self {
-        Self::News(error)
-    }
-}
-
 impl From<AiProviderError> for AiServiceError {
-    fn from(error: AiProviderError) -> Self {
-        Self::Provider(error)
+    fn from(e: AiProviderError) -> Self {
+        Self::Provider(e)
     }
 }
-
 impl From<serde_json::Error> for AiServiceError {
-    fn from(error: serde_json::Error) -> Self {
-        Self::Serialization(error)
+    fn from(e: serde_json::Error) -> Self {
+        Self::Serialization(e)
     }
 }
 
 pub struct AiService;
-
 impl AiService {
     pub fn status() -> AiServiceStatusView {
-        Self::status_from_configuration(AiRuntimeConfig::from_environment())
-    }
-
-    fn status_from_configuration(configuration: Option<AiRuntimeConfig>) -> AiServiceStatusView {
+        let configured = get_deepseek_status()
+            .map(|view| view.status == "已配置")
+            .unwrap_or(false);
         AiServiceStatusView {
-            configured: configuration.is_some(),
-            model: configuration.map(|configuration| configuration.model),
+            configured,
+            model: configured.then(|| DEEPSEEK_MODEL.into()),
         }
     }
-
     pub fn generate_from_runtime(
         database: &DatabaseService,
         review_date: &str,
     ) -> Result<AiReviewView, AiServiceError> {
-        let provider =
-            OpenAiCompatibleAdapter::from_runtime().ok_or(AiServiceError::NotConfigured)?;
+        let provider = DeepSeekProviderAdapter::from_keychain()?;
         Self::generate_with_provider(database, review_date, &provider)
     }
-
     pub fn generate_with_provider<P: AiProviderAdapter>(
         database: &DatabaseService,
         review_date: &str,
         provider: &P,
     ) -> Result<AiReviewView, AiServiceError> {
+        let daily_review = ReviewService::get(database, review_date)?;
+        let run = database
+            .latest_manual_refresh_run()?
+            .ok_or(AiServiceError::NoManualSnapshot)?;
+        let portfolio: Value = serde_json::from_str(&run.portfolio_json)?;
+        let market = json!({
+            "holdings": database.list_market_quotes_for_snapshot(run.holdings_snapshot_id)?,
+            "indices": database.list_market_index_quotes_for_snapshot(run.indices_snapshot_id)?,
+            "snapshotCompletedAt": run.completed_at,
+        });
         let input = AiReviewInput {
             prompt_version: PROMPT_VERSION.into(),
-            daily_review: ReviewService::get(database, review_date)?,
-            portfolio: PortfolioUiService::list(database)?,
-            holding_news: NewsService::list_for_holdings(database)?,
+            manual_refresh_run_id: run.id,
+            daily_review,
+            portfolio,
+            market,
+            news: json!({"status":"NO_DATA","items":[]}),
+            events: json!({"status":"NO_DATA","items":[]}),
         };
+        // Provider and safety validation happen before persistence. Therefore every failure leaves
+        // neither an AI review nor a context record behind.
         let sections = provider.generate(&input)?;
         validate_sections(&sections)?;
+        let context_id = database.create_ai_review_context(NewAiReviewContext {
+            review_id: input.daily_review.id,
+            manual_refresh_run_id: input.manual_refresh_run_id,
+            portfolio_json: serde_json::to_string(&input.portfolio)?,
+            market_json: serde_json::to_string(&input.market)?,
+            news_json: serde_json::to_string(&input.news)?,
+            events_json: serde_json::to_string(&input.events)?,
+        })?;
         let stored = database.create_ai_review(NewAiReview {
             review_id: input.daily_review.id,
             model: provider.model().into(),
             prompt_version: input.prompt_version,
+            context_id,
+            provider: provider.provider().into(),
             facts: serde_json::to_string(&sections.facts)?,
             inferences: serde_json::to_string(&sections.inferences)?,
             risks: serde_json::to_string(&sections.risks)?,
         })?;
         Self::view_from_record(stored)
     }
-
     pub fn latest_for_review(
         database: &DatabaseService,
         review_id: i64,
@@ -307,7 +267,6 @@ impl AiService {
             .map(Self::view_from_record)
             .transpose()
     }
-
     fn view_from_record(record: AiReview) -> Result<AiReviewView, AiServiceError> {
         let sections = AiReviewSections {
             facts: serde_json::from_str(&record.facts)?,
@@ -329,18 +288,17 @@ impl AiService {
 }
 
 fn parse_and_validate_sections(value: &str) -> Result<AiReviewSections, AiServiceError> {
-    let sections: AiReviewSections = serde_json::from_str(value)?;
+    let sections = serde_json::from_str(value)?;
     validate_sections(&sections)?;
     Ok(sections)
 }
-
 fn validate_sections(sections: &AiReviewSections) -> Result<(), AiServiceError> {
-    let entries = sections
+    for entry in sections
         .facts
         .iter()
         .chain(&sections.inferences)
-        .chain(&sections.risks);
-    for entry in entries {
+        .chain(&sections.risks)
+    {
         if entry.trim().is_empty() {
             return Err(AiServiceError::InvalidOutput("AI输出包含空内容"));
         }
@@ -352,7 +310,6 @@ fn validate_sections(sections: &AiReviewSections) -> Result<(), AiServiceError> 
     }
     Ok(())
 }
-
 fn contains_prohibited_language(value: &str) -> bool {
     const PROHIBITED: &[&str] = &[
         "买入",
@@ -372,11 +329,11 @@ fn contains_prohibited_language(value: &str) -> bool {
         "buy",
         "sell",
     ];
-    let value = value.to_lowercase();
-    PROHIBITED.iter().any(|term| value.contains(term))
+    let lower = value.to_lowercase();
+    PROHIBITED.iter().any(|term| lower.contains(term))
 }
 
-fn curl_ai_request(base_url: &str, api_key: &str, body: &Value) -> Result<Value, AiProviderError> {
+fn curl_ai_request(url: &str, api_key: &str, body: &Value) -> Result<Value, AiProviderError> {
     let body_path = unique_payload_path();
     if let Err(error) = write_payload(&body_path, body) {
         let _ = fs::remove_file(&body_path);
@@ -400,12 +357,7 @@ fn curl_ai_request(base_url: &str, api_key: &str, body: &Value) -> Result<Value,
         let mut child = command
             .spawn()
             .map_err(|_| AiProviderError::unavailable())?;
-        let config = format!(
-            "url = \"{}\"\nrequest = \"POST\"\nheader = \"Authorization: Bearer {}\"\nheader = \"Content-Type: application/json\"\ndata-binary = \"@{}\"\n",
-            curl_config_value(base_url),
-            curl_config_value(api_key),
-            curl_config_value(&body_path.to_string_lossy()),
-        );
+        let config = format!("url = \"{}\"\nrequest = \"POST\"\nheader = \"Authorization: Bearer {}\"\nheader = \"Content-Type: application/json\"\ndata-binary = \"@{}\"\n", curl_config_value(url), curl_config_value(api_key), curl_config_value(&body_path.to_string_lossy()));
         child
             .stdin
             .as_mut()
@@ -423,7 +375,6 @@ fn curl_ai_request(base_url: &str, api_key: &str, body: &Value) -> Result<Value,
     let _ = fs::remove_file(body_path);
     result
 }
-
 fn unique_payload_path() -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
         "astock-ai-review-request-{}-{}.json",
@@ -431,7 +382,6 @@ fn unique_payload_path() -> std::path::PathBuf {
         Utc::now().timestamp_nanos_opt().unwrap_or_default()
     ))
 }
-
 fn write_payload(path: &std::path::Path, body: &Value) -> Result<(), AiProviderError> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -446,7 +396,6 @@ fn write_payload(path: &std::path::Path, body: &Value) -> Result<(), AiProviderE
     serde_json::to_writer(&mut file, body).map_err(|_| AiProviderError::unavailable())?;
     file.flush().map_err(|_| AiProviderError::unavailable())
 }
-
 fn curl_config_value(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
@@ -455,13 +404,23 @@ fn curl_config_value(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::{
-        database::service::NewDailyReview,
+        database::service::{NewDailyReview, NewManualRefreshRun},
         review_service::{
             ReviewHoldingSummary, ReviewMarketSummary, ReviewPortfolioSummary, ReviewRiskSummary,
         },
     };
 
-    fn stored_review(database: &DatabaseService) -> DailyReviewView {
+    fn stored_review_and_snapshot(database: &DatabaseService) -> DailyReviewView {
+        let run = database
+            .create_manual_refresh_run(NewManualRefreshRun {
+                started_at: "2026-08-08T08:00:00Z".into(),
+                completed_at: "2026-08-08T08:01:00Z".into(),
+                holdings_snapshot_id: None,
+                indices_snapshot_id: None,
+                portfolio_json: "[]".into(),
+                status: "NO_DATA".into(),
+            })
+            .unwrap();
         database
             .upsert_daily_review(NewDailyReview {
                 review_date: "2026-08-08".into(),
@@ -472,36 +431,35 @@ mod tests {
                     return_rate: None,
                     holding_count: 0,
                 })
-                .expect("serialize portfolio"),
+                .unwrap(),
                 market_summary: serde_json::to_string(&ReviewMarketSummary {
                     snapshot: None,
                     major_indices: Vec::new(),
                 })
-                .expect("serialize market"),
+                .unwrap(),
                 holding_summary: serde_json::to_string(&ReviewHoldingSummary {
                     contributions: Vec::new(),
                 })
-                .expect("serialize holding"),
+                .unwrap(),
                 risk_summary: serde_json::to_string(&ReviewRiskSummary {
                     facts: vec!["暂无当日市场快照。".into()],
                     related_news_count: 0,
                 })
-                .expect("serialize risk"),
+                .unwrap(),
             })
-            .expect("store daily review");
-        ReviewService::get(database, "2026-08-08").expect("read daily review")
+            .unwrap();
+        assert!(run.id > 0);
+        ReviewService::get(database, "2026-08-08").unwrap()
     }
-
     struct RecordedProvider;
-
     impl AiProviderAdapter for RecordedProvider {
         fn model(&self) -> &str {
             "recorded-safe-model"
         }
-
         fn generate(&self, input: &AiReviewInput) -> Result<AiReviewSections, AiProviderError> {
-            assert_eq!(input.daily_review.review_date, "2026-08-08");
-            assert_eq!(input.prompt_version, PROMPT_VERSION);
+            assert_eq!(input.manual_refresh_run_id, 1);
+            assert_eq!(input.news["status"], "NO_DATA");
+            assert_eq!(input.events["status"], "NO_DATA");
             Ok(AiReviewSections {
                 facts: vec!["当日市场快照暂无数据。".into()],
                 inferences: vec!["基于已保存复盘，账户汇总数据尚未完整。".into()],
@@ -509,59 +467,56 @@ mod tests {
             })
         }
     }
-
-    #[test]
-    fn missing_runtime_values_reports_unconfigured_without_exposing_a_key() {
-        assert!(AiRuntimeConfig::from_values(None, None, None).is_none());
-        assert!(AiRuntimeConfig::from_values(Some("key"), None, Some("model")).is_none());
-        assert!(
-            AiRuntimeConfig::from_values(Some("key"), Some("http://insecure"), Some("model"))
-                .is_none()
-        );
-        let configured = AiRuntimeConfig::from_values(
-            Some("test-value"),
-            Some("https://provider.example.invalid/v1/chat/completions"),
-            Some("test-model"),
-        )
-        .expect("configured test values");
-        assert_eq!(configured.model, "test-model");
-        assert_eq!(
-            AiService::status_from_configuration(None),
-            AiServiceStatusView {
-                configured: false,
-                model: None,
-            }
-        );
+    struct FailingProvider;
+    impl AiProviderAdapter for FailingProvider {
+        fn model(&self) -> &str {
+            "failure"
+        }
+        fn generate(&self, _: &AiReviewInput) -> Result<AiReviewSections, AiProviderError> {
+            Err(AiProviderError::unavailable())
+        }
     }
-
     #[test]
-    fn provider_interface_persists_valid_structured_sections() {
-        let database = DatabaseService::open_in_memory().expect("create database");
-        let daily_review = stored_review(&database);
+    fn no_key_is_unconfigured() {
+        assert!(matches!(
+            DeepSeekProviderAdapter::from_key(None),
+            Err(AiServiceError::NotConfigured)
+        ));
+    }
+    #[test]
+    fn provider_success_persists_only_valid_context_bound_sections() {
+        let database = DatabaseService::open_in_memory().unwrap();
+        let review = stored_review_and_snapshot(&database);
         let generated =
-            AiService::generate_with_provider(&database, "2026-08-08", &RecordedProvider)
-                .expect("generate with recorded provider");
-        assert_eq!(generated.review_id, daily_review.id);
-        assert_eq!(generated.model, "recorded-safe-model");
+            AiService::generate_with_provider(&database, "2026-08-08", &RecordedProvider).unwrap();
+        assert_eq!(generated.review_id, review.id);
         assert_eq!(generated.facts.len(), 1);
-        let latest = AiService::latest_for_review(&database, daily_review.id)
-            .expect("load latest AI review")
-            .expect("AI review exists");
-        assert_eq!(latest, generated);
-    }
-
-    #[test]
-    fn output_structure_and_prohibited_language_are_checked() {
-        let valid = parse_and_validate_sections(
-            r#"{"facts":["行情状态为暂无数据。"],"inferences":["基于已保存数据，无法确认市场表现。"],"risks":["需要核验行情来源。"]}"#,
-        )
-        .expect("validate structured output");
-        assert_eq!(valid.facts.len(), 1);
-
-        let invalid = parse_and_validate_sections(
-            r#"{"facts":["行情状态为暂无数据。"],"inferences":["建议买入该证券。"],"risks":["需要核验行情来源。"]}"#,
+        assert_eq!(
+            AiService::latest_for_review(&database, review.id).unwrap(),
+            Some(generated)
         );
-        assert!(matches!(invalid, Err(AiServiceError::InvalidOutput(_))));
+    }
+    #[test]
+    fn network_failure_does_not_persist_an_ai_review_or_context() {
+        let database = DatabaseService::open_in_memory().unwrap();
+        let review = stored_review_and_snapshot(&database);
+        assert!(matches!(
+            AiService::generate_with_provider(&database, "2026-08-08", &FailingProvider),
+            Err(AiServiceError::Provider(_))
+        ));
+        assert!(AiService::latest_for_review(&database, review.id)
+            .unwrap()
+            .is_none());
+        assert_eq!(database.ai_review_context_count().unwrap(), 0);
+    }
+    #[test]
+    fn invalid_json_and_prohibited_content_are_rejected() {
         assert!(parse_and_validate_sections(r#"{"facts":[]}"#).is_err());
+        assert!(matches!(
+            parse_and_validate_sections(
+                r#"{"facts":["行情暂无数据"],"inferences":["建议买入"],"risks":["需要核验来源"]}"#
+            ),
+            Err(AiServiceError::InvalidOutput(_))
+        ));
     }
 }

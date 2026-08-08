@@ -23,7 +23,9 @@
 | `corporate_actions` | `id`, `security_id`, `action_type`, `announcement_date`, `effective_date`, `data_source_id`, `source_url`, `details_json`, `status` | 公司行动预留；支持 `DIVIDEND`、`SPLIT`、`EX_RIGHT` 的公告/事件记录，不自动调整持仓 |
 | `news_articles` | `id`, `title`, `source`, `source_type`, `published_at`, `fetch_time`, `summary`, `url`, `related_security_id`, `created_at` | 已保存资讯的可追溯记录；来源类型仅为 `OFFICIAL`、`MEDIA`、`COMMUNITY`，社区内容必须作为观点展示；可关联一只证券 |
 | `daily_reviews` | `id`, `review_date`, `snapshot_id`, `portfolio_summary`, `market_summary`, `holding_summary`, `risk_summary`, `created_at` | 非 AI 的每日结构化复盘；四个摘要字段保存类型化 JSON，`snapshot_id` 可为空以明确当日市场快照未确认 |
-| `ai_reviews` | `id`, `review_id`, `model`, `prompt_version`, `facts`, `inferences`, `risks`, `created_at` | 对已保存每日复盘的 AI 辅助解释；三段内容保存为 JSON 字符串，必须经结构与禁止词校验后才可落库 |
+| `manual_refresh_runs` | `id`, `started_at`, `completed_at`, `holdings_snapshot_id`, `indices_snapshot_id`, `portfolio_json`, `news_status`, `events_status`, `status` | 一次用户主动更新今日市场快照的不可变执行边界；新闻、事件尚未接入时显式为 `NO_DATA` |
+| `ai_review_contexts` | `id`, `review_id`, `manual_refresh_run_id`, `portfolio_json`, `market_json`, `news_json`, `events_json`, `created_at` | 一次成功 AI 调用的审计输入快照；不保存 API Key 或提示词全文 |
+| `ai_reviews` | `id`, `review_id`, `context_id`, `provider`, `model`, `prompt_version`, `request_status`, `facts`, `inferences`, `risks`, `created_at` | 对已保存每日复盘的 AI 辅助解释；三段内容保存为 JSON 字符串，必须经结构与禁止词校验后才可落库 |
 | `events` | `id`, `event_type`, `title`, `security_id`, `event_time`, `timezone`, `source`, `source_url`, `status`, `created_at` | 投资事件日历；支持财报、分红、除权除息、股东大会、宏观数据和美联储会议，保留来源、原始带时区时间及确认状态 |
 | `app_settings` | `setting_key`, `setting_value`, `updated_at` | 非敏感应用状态；V0.8.1 仅保存首次启动完成标志，禁止存储 API Key、Token 或券商信息 |
 
@@ -43,7 +45,7 @@
 - `market_snapshots` 与 `market_quotes` 分别按来源和证券时间建立索引，支持后续可追溯查询。
 - `news_articles` 强制要求标题、来源、来源类型、发布时间、抓取时间、摘要和 HTTP(S) 原文地址；原文地址唯一，关联证券删除时仅清除关联而保留资讯审计记录。按发布时间及关联证券建立索引，持仓页查询只返回存在当前持仓关联的记录。
 - `daily_reviews.review_date` 唯一；同一日期重新生成时原子更新四个摘要和关联快照，绝不生成第二条同日复盘。快照删除时复盘保留但 `snapshot_id` 设为空，以保留生成时的结构化事实和“未确认”状态。
-- `ai_reviews` 使用外键关联 `daily_reviews`，每日复盘删除时其 AI 辅助解释一并删除。保留模型名、提示词版本和生成时间以支持审计；运行时 API Key 不进入此表或其他 SQLite 表。
+- `ai_reviews` 使用外键关联 `daily_reviews`，每日复盘删除时其 AI 辅助解释一并删除；`context_id` 关联冻结的 `ai_review_contexts`，后者再关联一次 `manual_refresh_runs`。保留提供方、模型名、提示词版本和生成时间以支持审计；运行时 API Key 不进入此表或其他 SQLite 表。
 - `events.event_type` 仅允许 `EARNINGS`、`DIVIDEND`、`EX_DIVIDEND`、`SHAREHOLDER_MEETING`、`MACRO_DATA`、`FED_MEETING`；`status` 仅允许 `CONFIRMED`、`UNCONFIRMED`、`ARCHIVED`。`security_id` 可为空以支持宏观/FED 事件；证券删除时只清除关联、保留事件。查询先标识当前持仓关联事件，再按解析后的原始带时区时间排序，不推断日期或状态。
 - `app_settings` 仅保存产品运行状态。首次启动向导使用 `initialization_completed=true` 表示完成；该值在数据库重启后保留。不得将配置密钥、个人凭据或任何金融数据写入该表。
 

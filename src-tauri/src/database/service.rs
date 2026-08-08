@@ -3,6 +3,7 @@
 use std::{error::Error, fmt, fs, path::Path};
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
+use serde::Serialize;
 use tauri::Manager;
 
 use super::migrations;
@@ -113,6 +114,53 @@ pub struct MarketIndexQuoteRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManualRefreshRun {
+    pub id: i64,
+    pub holdings_snapshot_id: Option<i64>,
+    pub indices_snapshot_id: Option<i64>,
+    pub portfolio_json: String,
+    pub completed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredMarketQuote {
+    pub symbol: String,
+    pub name: String,
+    pub market: String,
+    pub current_price: String,
+    pub previous_close: String,
+    pub price_change: String,
+    pub change_percent: String,
+    pub volume: String,
+    pub turnover_amount: String,
+    pub market_timestamp: String,
+    pub fetched_at: String,
+    pub source: String,
+    pub delay_status: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewManualRefreshRun {
+    pub started_at: String,
+    pub completed_at: String,
+    pub holdings_snapshot_id: Option<i64>,
+    pub indices_snapshot_id: Option<i64>,
+    pub portfolio_json: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewAiReviewContext {
+    pub review_id: i64,
+    pub manual_refresh_run_id: i64,
+    pub portfolio_json: String,
+    pub market_json: String,
+    pub news_json: String,
+    pub events_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewsArticle {
     pub id: i64,
     pub title: String,
@@ -194,6 +242,10 @@ pub struct AiReview {
     pub review_id: i64,
     pub model: String,
     pub prompt_version: String,
+    pub context_id: Option<i64>,
+    pub provider: String,
+    pub request_status: String,
+    pub error_code: Option<String>,
     pub facts: String,
     pub inferences: String,
     pub risks: String,
@@ -205,6 +257,8 @@ pub struct NewAiReview {
     pub review_id: i64,
     pub model: String,
     pub prompt_version: String,
+    pub context_id: i64,
+    pub provider: String,
     pub facts: String,
     pub inferences: String,
     pub risks: String,
@@ -504,19 +558,105 @@ impl DatabaseService {
     pub fn create_ai_review(&self, input: NewAiReview) -> DatabaseResult<AiReview> {
         self.connection.execute(
             "
-            INSERT INTO ai_reviews (review_id, model, prompt_version, facts, inferences, risks)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO ai_reviews (
+                review_id, model, prompt_version, context_id, provider, request_status,
+                facts, inferences, risks
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'COMPLETED', ?6, ?7, ?8)
             ",
             params![
                 input.review_id,
                 input.model,
                 input.prompt_version,
+                input.context_id,
+                input.provider,
                 input.facts,
                 input.inferences,
                 input.risks,
             ],
         )?;
         self.get_ai_review(self.connection.last_insert_rowid())
+    }
+
+    pub fn create_manual_refresh_run(
+        &self,
+        input: NewManualRefreshRun,
+    ) -> DatabaseResult<ManualRefreshRun> {
+        self.connection.execute(
+            "
+            INSERT INTO manual_refresh_runs (
+                started_at, completed_at, holdings_snapshot_id, indices_snapshot_id, portfolio_json,
+                news_status, events_status, status
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'NO_DATA', 'NO_DATA', ?6)
+            ",
+            params![
+                input.started_at,
+                input.completed_at,
+                input.holdings_snapshot_id,
+                input.indices_snapshot_id,
+                input.portfolio_json,
+                input.status,
+            ],
+        )?;
+        self.get_manual_refresh_run(self.connection.last_insert_rowid())
+    }
+
+    pub fn get_manual_refresh_run(&self, id: i64) -> DatabaseResult<ManualRefreshRun> {
+        self.connection
+            .query_row(
+                "SELECT id, holdings_snapshot_id, indices_snapshot_id, portfolio_json, completed_at
+             FROM manual_refresh_runs WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok(ManualRefreshRun {
+                        id: row.get(0)?,
+                        holdings_snapshot_id: row.get(1)?,
+                        indices_snapshot_id: row.get(2)?,
+                        portfolio_json: row.get(3)?,
+                        completed_at: row.get(4)?,
+                    })
+                },
+            )
+            .map_err(Into::into)
+    }
+
+    pub fn latest_manual_refresh_run(&self) -> DatabaseResult<Option<ManualRefreshRun>> {
+        self.connection
+            .query_row(
+                "SELECT id, holdings_snapshot_id, indices_snapshot_id, portfolio_json, completed_at
+             FROM manual_refresh_runs ORDER BY completed_at DESC, id DESC LIMIT 1",
+                [],
+                |row| {
+                    Ok(ManualRefreshRun {
+                        id: row.get(0)?,
+                        holdings_snapshot_id: row.get(1)?,
+                        indices_snapshot_id: row.get(2)?,
+                        portfolio_json: row.get(3)?,
+                        completed_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn create_ai_review_context(&self, input: NewAiReviewContext) -> DatabaseResult<i64> {
+        self.connection.execute(
+            "INSERT INTO ai_review_contexts (
+                review_id, manual_refresh_run_id, portfolio_json, market_json, news_json, events_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![input.review_id, input.manual_refresh_run_id, input.portfolio_json,
+                input.market_json, input.news_json, input.events_json],
+        )?;
+        Ok(self.connection.last_insert_rowid())
+    }
+
+    #[cfg(test)]
+    pub fn ai_review_context_count(&self) -> DatabaseResult<i64> {
+        self.connection
+            .query_row("SELECT COUNT(*) FROM ai_review_contexts", [], |row| {
+                row.get(0)
+            })
+            .map_err(Into::into)
     }
 
     pub fn create_event(&self, input: NewEventRecord) -> DatabaseResult<EventRecord> {
@@ -587,7 +727,8 @@ impl DatabaseService {
         self.connection
             .query_row(
                 "
-                SELECT id, review_id, model, prompt_version, facts, inferences, risks, created_at
+                SELECT id, review_id, model, prompt_version, context_id, provider, request_status,
+                       error_code, facts, inferences, risks, created_at
                 FROM ai_reviews WHERE id = ?1
                 ",
                 [id],
@@ -603,7 +744,8 @@ impl DatabaseService {
         self.connection
             .query_row(
                 "
-                SELECT id, review_id, model, prompt_version, facts, inferences, risks, created_at
+                SELECT id, review_id, model, prompt_version, context_id, provider, request_status,
+                       error_code, facts, inferences, risks, created_at
                 FROM ai_reviews WHERE review_id = ?1
                 ORDER BY created_at DESC, id DESC
                 LIMIT 1
@@ -1289,10 +1431,14 @@ impl DatabaseService {
             review_id: row.get(1)?,
             model: row.get(2)?,
             prompt_version: row.get(3)?,
-            facts: row.get(4)?,
-            inferences: row.get(5)?,
-            risks: row.get(6)?,
-            created_at: row.get(7)?,
+            context_id: row.get(4)?,
+            provider: row.get(5)?,
+            request_status: row.get(6)?,
+            error_code: row.get(7)?,
+            facts: row.get(8)?,
+            inferences: row.get(9)?,
+            risks: row.get(10)?,
+            created_at: row.get(11)?,
         })
     }
 
@@ -1402,6 +1548,7 @@ impl DatabaseService {
 impl MarketSnapshotStore for DatabaseService {
     fn save_market_snapshot(&self, snapshot: &MarketSnapshot) -> Result<(), MarketStoreError> {
         self.save_market_snapshot_inner(snapshot)
+            .map(|_| ())
             .map_err(|error| MarketStoreError {
                 message: error.to_string(),
             })
@@ -1409,13 +1556,20 @@ impl MarketSnapshotStore for DatabaseService {
 }
 
 impl DatabaseService {
-    fn save_market_snapshot_inner(&self, snapshot: &MarketSnapshot) -> DatabaseResult<()> {
+    pub fn save_market_snapshot_with_id(
+        &self,
+        snapshot: &MarketSnapshot,
+    ) -> DatabaseResult<Option<i64>> {
+        self.save_market_snapshot_inner(snapshot)
+    }
+
+    fn save_market_snapshot_inner(&self, snapshot: &MarketSnapshot) -> DatabaseResult<Option<i64>> {
         let source_id = self.upsert_market_source(snapshot)?;
 
         // A NO_DATA result has no provider market timestamp. Persist its safe source status only;
         // inserting a fabricated timestamp into market_snapshots would violate traceability rules.
         let Some(market_timestamp) = snapshot.market_timestamp else {
-            return Ok(());
+            return Ok(None);
         };
 
         self.connection.execute(
@@ -1482,13 +1636,21 @@ impl DatabaseService {
                 ],
             )?;
         }
-        Ok(())
+        Ok(Some(snapshot_id))
     }
 
     pub fn save_market_index_snapshot(&self, snapshot: &MarketSnapshot) -> DatabaseResult<()> {
+        self.save_market_index_snapshot_with_id(snapshot)
+            .map(|_| ())
+    }
+
+    pub fn save_market_index_snapshot_with_id(
+        &self,
+        snapshot: &MarketSnapshot,
+    ) -> DatabaseResult<Option<i64>> {
         let source_id = self.upsert_market_source(snapshot)?;
         let Some(market_timestamp) = snapshot.market_timestamp else {
-            return Ok(());
+            return Ok(None);
         };
         self.connection.execute(
             "
@@ -1531,7 +1693,78 @@ impl DatabaseService {
                 ],
             )?;
         }
-        Ok(())
+        Ok(Some(snapshot_id))
+    }
+
+    pub fn list_market_quotes_for_snapshot(
+        &self,
+        snapshot_id: Option<i64>,
+    ) -> DatabaseResult<Vec<StoredMarketQuote>> {
+        let Some(snapshot_id) = snapshot_id else {
+            return Ok(Vec::new());
+        };
+        let mut statement = self.connection.prepare(
+            "SELECT symbol, security_name, market, current_price, previous_close, price_change,
+                    change_pct, volume, turnover_amount, market_timestamp, fetched_at, source, delay_status
+             FROM market_quotes WHERE market_snapshot_id = ?1 ORDER BY symbol"
+        )?;
+        let records = statement
+            .query_map([snapshot_id], |row| {
+                Ok(StoredMarketQuote {
+                    symbol: row.get(0)?,
+                    name: row.get(1)?,
+                    market: row.get(2)?,
+                    current_price: row.get(3)?,
+                    previous_close: row.get(4)?,
+                    price_change: row.get(5)?,
+                    change_percent: row.get(6)?,
+                    volume: row.get(7)?,
+                    turnover_amount: row.get(8)?,
+                    market_timestamp: row.get(9)?,
+                    fetched_at: row.get(10)?,
+                    source: row.get(11)?,
+                    delay_status: row.get(12)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into);
+        records
+    }
+
+    pub fn list_market_index_quotes_for_snapshot(
+        &self,
+        snapshot_id: Option<i64>,
+    ) -> DatabaseResult<Vec<StoredMarketQuote>> {
+        let Some(snapshot_id) = snapshot_id else {
+            return Ok(Vec::new());
+        };
+        let mut statement = self.connection.prepare(
+            "SELECT symbol, name, CASE WHEN symbol LIKE '%.SH' THEN 'SSE' ELSE 'SZSE' END,
+                    current_price, '0', '0', COALESCE(change_percent, '0'), '0', '0',
+                    updated_at, updated_at, source, status
+             FROM market_index_quotes WHERE market_snapshot_id = ?1 ORDER BY symbol",
+        )?;
+        let records = statement
+            .query_map([snapshot_id], |row| {
+                Ok(StoredMarketQuote {
+                    symbol: row.get(0)?,
+                    name: row.get(1)?,
+                    market: row.get(2)?,
+                    current_price: row.get(3)?,
+                    previous_close: row.get(4)?,
+                    price_change: row.get(5)?,
+                    change_percent: row.get(6)?,
+                    volume: row.get(7)?,
+                    turnover_amount: row.get(8)?,
+                    market_timestamp: row.get(9)?,
+                    fetched_at: row.get(10)?,
+                    source: row.get(11)?,
+                    delay_status: row.get(12)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into);
+        records
     }
 }
 
@@ -1588,15 +1821,16 @@ mod tests {
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN (
                     'securities', 'holdings', 'transactions', 'cash_accounts',
                     'market_snapshots', 'market_quotes', 'data_sources', 'news_articles',
-                    'daily_reviews', 'ai_reviews', 'events', 'app_settings', 'market_index_quotes'
+                    'daily_reviews', 'ai_reviews', 'events', 'app_settings', 'market_index_quotes',
+                    'manual_refresh_runs', 'ai_review_contexts'
                 )",
                 [],
                 |row| row.get(0),
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 9);
-        assert_eq!(table_count, 13);
+        assert_eq!(migration_count, 10);
+        assert_eq!(table_count, 15);
     }
 
     #[test]
@@ -1792,8 +2026,23 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("verify market index quote table");
+        let manual_refresh_runs_exists: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'manual_refresh_runs'",
+            [], |row| row.get(0),
+        ).expect("verify refresh run table");
+        let ai_contexts_exists: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ai_review_contexts'",
+            [], |row| row.get(0),
+        ).expect("verify AI context table");
+        let ai_review_provider_column: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('ai_reviews') WHERE name = 'provider'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("verify AI provider column");
 
-        assert_eq!(migration_count, 9);
+        assert_eq!(migration_count, 10);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -1809,6 +2058,9 @@ mod tests {
         assert_eq!(ai_reviews_exists, 1);
         assert_eq!(events_exists, 1);
         assert_eq!(app_settings_exists, 1);
+        assert_eq!(manual_refresh_runs_exists, 1);
+        assert_eq!(ai_contexts_exists, 1);
+        assert_eq!(ai_review_provider_column, 1);
         assert_eq!(market_index_quotes_exists, 1);
     }
 

@@ -40,7 +40,7 @@ Phase 6-A 的财经资讯页面通过 `get_holding_news_articles` Command 读取
 
 Phase 6-B 的仓位复盘页面通过 `get_daily_review` 与 `generate_daily_review` Command 访问 `review_service`。服务只读取 Portfolio Service 的持仓视图、当日已保存市场快照、Dashboard 的已验证指数视图和 News Service 的持仓关联记录；不请求任何 Provider。复盘把账户、市场、持仓贡献和风险事实保存为类型化 JSON。贡献按已计算的今日盈亏降序排列；风险段只能陈述数据缺失、快照状态和已保存资讯数量，禁止预测、收益承诺与买卖建议。
 
-Phase 6-C 的 AI 复盘区通过 `get_ai_service_status`、`get_latest_ai_review` 和 `generate_ai_review` Command 访问 `ai_service`。`ai_service` 组装已保存的每日复盘（含市场快照）、Portfolio 持仓和持仓关联资讯，再交给 `AiProviderAdapter`；UI 不接触模型或 Key。当前 `OpenAiCompatibleAdapter` 只在 `AI_API_KEY`（或 `OPENAI_API_KEY`）、`AI_BASE_URL` 和 `AI_MODEL` 均存在时启用，密钥仅经运行时环境读取，并通过 `curl` 的标准输入传递授权头，不进入参数、日志、SQLite 或前端。模型返回值必须是 JSON 的 `FACTS`、`INFERENCES`、`RISKS` 三段；保存前拒绝买卖推荐、目标价、收益预测/承诺等禁止语言。
+Phase 7-E1 的 AI 复盘区通过 `get_ai_service_status`、`get_latest_ai_review` 和 `generate_ai_review` Command 访问 `ai_service`；设置页通过 `get_deepseek_status`、`save_deepseek_api_key`、`remove_deepseek_api_key` 管理安全配置。`DeepSeekProviderAdapter` 使用 DeepSeek 的 OpenAI Compatible Chat Completions 非流式 JSON Output 接口，密钥只保存于系统凭据库（macOS 为 Keychain），经 `curl` 标准输入传递授权头，不进入参数、日志、SQLite 或前端。每次生成必须绑定一次已保存的 `manual_refresh_runs`，冻结该次持仓 JSON 与市场快照；本阶段新闻和事件明确输入 `NO_DATA`。模型返回值必须是 JSON 的 `FACTS`、`INFERENCES`、`RISKS` 三段；保存前拒绝买卖推荐、目标价、收益预测/承诺等禁止语言，任何失败、结构异常或安全校验失败都不展示、也不落库。
 
 Phase 6-D 的事件日历页面通过 `get_calendar_events` Command 访问 `event_service`。服务保存和验证事件类型、原始带时区时间、来源、可选原文地址、确认状态及证券关联；`EventDataAdapter` 是未来官方、媒体或宏观日历来源的预留接口。本阶段不接入外部事件抓取，不猜测事件日期。默认查询把当前持仓关联事件置前，再按实际事件时间升序排列；UI 可按确认状态过滤。
 

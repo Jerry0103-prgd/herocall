@@ -16,6 +16,20 @@ export type AiReview = {
   createdAt: string;
 };
 
+export type DeepSeekStatus = { status: "已配置" | "未配置" };
+
+export function loadDeepSeekStatus(): Promise<DeepSeekStatus> {
+  return invoke<DeepSeekStatus>("get_deepseek_status");
+}
+
+export function saveDeepSeekApiKey(key: string): Promise<DeepSeekStatus> {
+  return invoke<DeepSeekStatus>("save_deepseek_api_key", { key });
+}
+
+export function removeDeepSeekApiKey(): Promise<DeepSeekStatus> {
+  return invoke<DeepSeekStatus>("remove_deepseek_api_key");
+}
+
 export function loadAiServiceStatus(): Promise<AiServiceStatus> {
   return invoke<AiServiceStatus>("get_ai_service_status");
 }
