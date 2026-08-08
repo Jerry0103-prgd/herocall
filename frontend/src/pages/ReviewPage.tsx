@@ -17,6 +17,16 @@ function valueOrUnavailable(value: string | null) {
   return value ?? "暂无数据";
 }
 
+function safeErrorMessage(error: unknown, fallback: string) {
+  if (typeof error === "string" && error.trim()) return error;
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === "object" && error && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  return fallback;
+}
+
 export function ReviewPage() {
   const [reviewDate, setReviewDate] = useState(chinaToday);
   const [review, setReview] = useState<DailyReview | null>(null);
@@ -63,7 +73,7 @@ export function ReviewPage() {
       .catch((error) => {
         setAiReview(null);
         setAiGenerationState("failed");
-        setAiError(error instanceof Error ? error.message : "无法读取已保存的AI复盘");
+        setAiError(safeErrorMessage(error, "无法读取已保存的AI复盘"));
       });
   }, [aiStatus?.configured, review]);
 
@@ -88,7 +98,7 @@ export function ReviewPage() {
       setAiGenerationState("success");
       setMessage("AI辅助分析已生成");
     } catch (error) {
-      const detail = error instanceof Error ? error.message : "AI辅助分析生成失败";
+      const detail = safeErrorMessage(error, "DeepSeek 请求失败，未返回可用错误详情");
       setAiReview(null);
       setAiGenerationState("failed");
       setAiError(detail);

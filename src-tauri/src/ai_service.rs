@@ -78,23 +78,34 @@ pub trait AiProviderAdapter {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AiProviderError {
-    message: &'static str,
+    message: String,
 }
 impl AiProviderError {
     fn unavailable() -> Self {
         Self {
-            message: "AI Provider 暂不可用",
+            message: "DeepSeek 网络请求失败".into(),
         }
     }
-    fn invalid_response() -> Self {
+    fn invalid_response(reason: impl fmt::Display) -> Self {
         Self {
-            message: "AI Provider 返回格式无效",
+            message: format!("DeepSeek 返回格式错误：{reason}"),
+        }
+    }
+    fn http_error(status: u16, body: &str) -> Self {
+        let category = match status {
+            401 | 403 => "DeepSeek API认证失败",
+            429 => "DeepSeek API请求过于频繁",
+            _ => "DeepSeek API请求失败",
+        };
+        let detail = (!body.is_empty()).then(|| format!("：{body}"));
+        Self {
+            message: format!("{category}（HTTP {status}）{}", detail.unwrap_or_default()),
         }
     }
 }
 impl fmt::Display for AiProviderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.message)
+        f.write_str(&self.message)
     }
 }
 impl Error for AiProviderError {}
@@ -106,9 +117,12 @@ pub struct DeepSeekProviderAdapter {
 }
 impl DeepSeekProviderAdapter {
     fn from_keychain() -> Result<Self, AiServiceError> {
-        Self::from_key(
-            load_deepseek_api_key_for_adapter().map_err(|_| AiServiceError::KeychainUnavailable)?,
-        )
+        let key = load_deepseek_api_key_for_adapter().map_err(|_| {
+            ai_diagnostic("keychain_read=false");
+            AiServiceError::KeychainUnavailable
+        })?;
+        ai_diagnostic(format!("keychain_read={}", key.is_some()));
+        Self::from_key(key)
     }
     fn from_key(key: Option<String>) -> Result<Self, AiServiceError> {
         key.filter(|value| !value.trim().is_empty())
@@ -142,8 +156,11 @@ impl AiProviderAdapter for DeepSeekProviderAdapter {
         let content = response
             .pointer("/choices/0/message/content")
             .and_then(Value::as_str)
-            .ok_or_else(AiProviderError::invalid_response)?;
-        parse_and_validate_sections(content).map_err(|_| AiProviderError::invalid_response())
+            .ok_or_else(|| AiProviderError::invalid_response("缺少 choices[0].message.content"))?;
+        parse_and_validate_sections(content).map_err(|error| {
+            ai_diagnostic(format!("json_parse_failed=true reason={error}"));
+            AiProviderError::invalid_response(error)
+        })
     }
 }
 
@@ -209,8 +226,14 @@ impl AiService {
         database: &DatabaseService,
         review_date: &str,
     ) -> Result<AiReviewView, AiServiceError> {
-        let provider = DeepSeekProviderAdapter::from_keychain()?;
-        Self::generate_with_provider(database, review_date, &provider)
+        let result = (|| {
+            let provider = DeepSeekProviderAdapter::from_keychain()?;
+            Self::generate_with_provider(database, review_date, &provider)
+        })();
+        if let Err(error) = &result {
+            ai_diagnostic(format!("rust_final_error={error}"));
+        }
+        result
     }
     pub fn generate_with_provider<P: AiProviderAdapter>(
         database: &DatabaseService,
@@ -221,10 +244,14 @@ impl AiService {
         let run = database
             .latest_manual_refresh_run()?
             .ok_or(AiServiceError::NoManualSnapshot)?;
+        ai_diagnostic(format!("manual_refresh_run_id={}", run.id));
         let portfolio: Value = serde_json::from_str(&run.portfolio_json)?;
+        let holding_quotes = database.list_market_quotes_for_snapshot(run.holdings_snapshot_id)?;
+        let index_quotes =
+            database.list_market_index_quotes_for_snapshot(run.indices_snapshot_id)?;
         let market = json!({
-            "holdings": database.list_market_quotes_for_snapshot(run.holdings_snapshot_id)?,
-            "indices": database.list_market_index_quotes_for_snapshot(run.indices_snapshot_id)?,
+            "holdings": holding_quotes,
+            "indices": index_quotes,
             "snapshotCompletedAt": run.completed_at,
         });
         let input = AiReviewInput {
@@ -236,6 +263,12 @@ impl AiService {
             news: json!({"status":"NO_DATA","items":[]}),
             events: json!({"status":"NO_DATA","items":[]}),
         };
+        ai_diagnostic(format!(
+            "ai_context_generated=true manual_refresh_run_id={} holding_quotes={} index_quotes={}",
+            input.manual_refresh_run_id,
+            input.market["holdings"].as_array().map_or(0, Vec::len),
+            input.market["indices"].as_array().map_or(0, Vec::len),
+        ));
         // Provider and safety validation happen before persistence. Therefore every failure leaves
         // neither an AI review nor a context record behind.
         let sections = provider.generate(&input)?;
@@ -248,6 +281,9 @@ impl AiService {
             news_json: serde_json::to_string(&input.news)?,
             events_json: serde_json::to_string(&input.events)?,
         })?;
+        ai_diagnostic(format!(
+            "ai_review_context_written=true context_id={context_id}"
+        ));
         let stored = database.create_ai_review(NewAiReview {
             review_id: input.daily_review.id,
             model: provider.model().into(),
@@ -337,7 +373,12 @@ fn contains_prohibited_language(value: &str) -> bool {
 
 fn curl_ai_request(url: &str, api_key: &str, body: &Value) -> Result<Value, AiProviderError> {
     let body_path = unique_payload_path();
+    let response_path = unique_response_path();
     if let Err(error) = write_payload(&body_path, body) {
+        let _ = fs::remove_file(&body_path);
+        return Err(error);
+    }
+    if let Err(error) = create_private_empty_file(&response_path) {
         let _ = fs::remove_file(&body_path);
         return Err(error);
     }
@@ -347,7 +388,6 @@ fn curl_ai_request(url: &str, api_key: &str, body: &Value) -> Result<Value, AiPr
             .args([
                 "--config",
                 "-",
-                "--fail",
                 "--silent",
                 "--show-error",
                 "--max-time",
@@ -359,7 +399,7 @@ fn curl_ai_request(url: &str, api_key: &str, body: &Value) -> Result<Value, AiPr
         let mut child = command
             .spawn()
             .map_err(|_| AiProviderError::unavailable())?;
-        let config = format!("url = \"{}\"\nrequest = \"POST\"\nheader = \"Authorization: Bearer {}\"\nheader = \"Content-Type: application/json\"\ndata-binary = \"@{}\"\n", curl_config_value(url), curl_config_value(api_key), curl_config_value(&body_path.to_string_lossy()));
+        let config = format!("url = \"{}\"\nrequest = \"POST\"\nheader = \"Authorization: Bearer {}\"\nheader = \"Content-Type: application/json\"\ndata-binary = \"@{}\"\noutput = \"{}\"\nwrite-out = \"%{{http_code}}\"\n", curl_config_value(url), curl_config_value(api_key), curl_config_value(&body_path.to_string_lossy()), curl_config_value(&response_path.to_string_lossy()));
         child
             .stdin
             .as_mut()
@@ -370,11 +410,29 @@ fn curl_ai_request(url: &str, api_key: &str, body: &Value) -> Result<Value, AiPr
             .wait_with_output()
             .map_err(|_| AiProviderError::unavailable())?;
         if !output.status.success() {
+            ai_diagnostic("deepseek_http_status=NETWORK_FAILURE api_error_body=<unavailable>");
             return Err(AiProviderError::unavailable());
         }
-        serde_json::from_slice(&output.stdout).map_err(|_| AiProviderError::invalid_response())
+        let status = std::str::from_utf8(&output.stdout)
+            .ok()
+            .and_then(|value| value.trim().parse::<u16>().ok())
+            .ok_or_else(|| AiProviderError::invalid_response("缺少HTTP状态码"))?;
+        let response_body = fs::read(&response_path).map_err(|_| AiProviderError::unavailable())?;
+        if !(200..300).contains(&status) {
+            let safe_body = sanitize_api_error_body(&response_body, api_key);
+            ai_diagnostic(format!(
+                "deepseek_http_status={status} api_error_body={safe_body}"
+            ));
+            return Err(AiProviderError::http_error(status, &safe_body));
+        }
+        ai_diagnostic(format!("deepseek_http_status={status}"));
+        serde_json::from_slice(&response_body).map_err(|error| {
+            ai_diagnostic(format!("json_parse_failed=true reason={error}"));
+            AiProviderError::invalid_response(error)
+        })
     })();
     let _ = fs::remove_file(body_path);
+    let _ = fs::remove_file(response_path);
     result
 }
 fn unique_payload_path() -> std::path::PathBuf {
@@ -384,7 +442,19 @@ fn unique_payload_path() -> std::path::PathBuf {
         Utc::now().timestamp_nanos_opt().unwrap_or_default()
     ))
 }
+fn unique_response_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "hero-call-ai-response-{}-{}.json",
+        std::process::id(),
+        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ))
+}
 fn write_payload(path: &std::path::Path, body: &Value) -> Result<(), AiProviderError> {
+    let mut file = create_private_empty_file(path)?;
+    serde_json::to_writer(&mut file, body).map_err(|_| AiProviderError::unavailable())?;
+    file.flush().map_err(|_| AiProviderError::unavailable())
+}
+fn create_private_empty_file(path: &std::path::Path) -> Result<fs::File, AiProviderError> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -392,14 +462,25 @@ fn write_payload(path: &std::path::Path, body: &Value) -> Result<(), AiProviderE
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options
+    options
         .open(path)
-        .map_err(|_| AiProviderError::unavailable())?;
-    serde_json::to_writer(&mut file, body).map_err(|_| AiProviderError::unavailable())?;
-    file.flush().map_err(|_| AiProviderError::unavailable())
+        .map_err(|_| AiProviderError::unavailable())
 }
 fn curl_config_value(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+fn sanitize_api_error_body(body: &[u8], api_key: &str) -> String {
+    let value = String::from_utf8_lossy(body).replace(api_key, "[REDACTED]");
+    let value = value.replace("Authorization: Bearer", "Authorization: [REDACTED]");
+    let mut safe = value.chars().take(800).collect::<String>();
+    if value.chars().count() > 800 {
+        safe.push('…');
+    }
+    safe.replace(['\n', '\r'], " ")
+}
+fn ai_diagnostic(message: impl fmt::Display) {
+    // Deliberately contains only status, IDs, counts and server-returned text with the Key redacted.
+    eprintln!("[hero-call][ai-diagnostic] {message}");
 }
 
 #[cfg(test)]
@@ -520,5 +601,15 @@ mod tests {
             ),
             Err(AiServiceError::InvalidOutput(_))
         ));
+    }
+
+    #[test]
+    fn api_errors_keep_status_but_redact_the_key() {
+        let error = AiProviderError::http_error(401, "invalid api key: [REDACTED]");
+        assert!(error.to_string().contains("API认证失败（HTTP 401）"));
+        assert_eq!(
+            sanitize_api_error_body(b"{\"error\":\"sk-test-secret\"}", "sk-test-secret"),
+            "{\"error\":\"[REDACTED]\"}"
+        );
     }
 }
