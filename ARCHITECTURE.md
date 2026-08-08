@@ -7,7 +7,7 @@
 ## 2. 分层
 
 ```text
-React/TypeScript UI（侧栏、Dashboard、Portfolio、Settings、News 页面）
+React/TypeScript UI（侧栏、Dashboard、Portfolio、Settings、News、Review 页面）
   └─ Tauri command / event 边界
        └─ Rust application services（含只读 Dashboard 查询服务）
             ├─ Domain：持仓、交易、T+1、盈亏、复盘规则
@@ -37,6 +37,8 @@ Phase 5-B 的 Portfolio 页面通过 `get_portfolio_holdings`、`create_portfoli
 Phase 5-C 的 Settings 页面通过 `get_settings_status`、`get_cash_accounts`、`create_cash_account` 和 `create_database_backup` Command 访问 `settings_service`。Tushare Token 仅从运行时 `TUSHARE_TOKEN` 读取，服务只返回“已配置/未配置”，不保存、不回传、不记录 Token。现金账户仅支持用户手工维护的 `CNY` 记账余额。备份由 SQLite `VACUUM INTO` 生成一致性副本，写入系统 Documents 下的 `AStock-AI-Workbench/backups`，且绝不覆盖同名文件。
 
 Phase 6-A 的财经资讯页面通过 `get_holding_news_articles` Command 读取 `news_service` 的持仓关联视图。`news_service` 负责验证并存储完整来源、发布时间、抓取时间、摘要、原文地址和关联证券；其 `NewsDataAdapter` 是官方公告、媒体与社区数据源的统一预留端口。本阶段没有外部资讯抓取、没有种子内容，社区记录仅能以 `COMMUNITY` / “社区观点”呈现。
+
+Phase 6-B 的仓位复盘页面通过 `get_daily_review` 与 `generate_daily_review` Command 访问 `review_service`。服务只读取 Portfolio Service 的持仓视图、当日已保存市场快照、Dashboard 的已验证指数视图和 News Service 的持仓关联记录；不请求任何 Provider。复盘把账户、市场、持仓贡献和风险事实保存为类型化 JSON。贡献按已计算的今日盈亏降序排列；风险段只能陈述数据缺失、快照状态和已保存资讯数量，禁止预测、收益承诺与买卖建议。
 
 ## 4. 数据流与质量控制
 

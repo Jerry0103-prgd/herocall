@@ -1,6 +1,6 @@
 # 数据库设计（逻辑模型）
 
-本文件描述 SQLite 逻辑模型与 V0.6 已落地的数据库核心。迁移由 Rust 服务层版本化管理；所有时间字段使用 ISO 8601 UTC，交易日期字段以 `Asia/Shanghai` 解释。
+本文件描述 SQLite 逻辑模型与 V0.6.1 已落地的数据库核心。迁移由 Rust 服务层版本化管理；所有时间字段使用 ISO 8601 UTC，交易日期字段以 `Asia/Shanghai` 解释。
 
 ## 1. 建模原则
 
@@ -22,12 +22,13 @@
 | `market_quotes` | `id`, `market_snapshot_id`, `security_id`, `symbol`, `security_name`, `market`, `current_price`, `previous_close`, `price_change`, `change_pct`, `volume`, `turnover_amount`, `market_timestamp`, `fetched_at`, `source`, `delay_status` | 单条规范化行情及完整来源/时间/延迟元数据；成交量与成交额同时保存供应商声明单位 |
 | `corporate_actions` | `id`, `security_id`, `action_type`, `announcement_date`, `effective_date`, `data_source_id`, `source_url`, `details_json`, `status` | 公司行动预留；支持 `DIVIDEND`、`SPLIT`、`EX_RIGHT` 的公告/事件记录，不自动调整持仓 |
 | `news_articles` | `id`, `title`, `source`, `source_type`, `published_at`, `fetch_time`, `summary`, `url`, `related_security_id`, `created_at` | 已保存资讯的可追溯记录；来源类型仅为 `OFFICIAL`、`MEDIA`、`COMMUNITY`，社区内容必须作为观点展示；可关联一只证券 |
+| `daily_reviews` | `id`, `review_date`, `snapshot_id`, `portfolio_summary`, `market_summary`, `holding_summary`, `risk_summary`, `created_at` | 非 AI 的每日结构化复盘；四个摘要字段保存类型化 JSON，`snapshot_id` 可为空以明确当日市场快照未确认 |
 
-`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）、`002`（金融领域字段补充）、`003`（行情标准字段）和 `004`（资讯存储）；迁移重复执行不会重新建表，已应用迁移的校验标识不匹配会阻止继续启动。
+`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）、`002`（金融领域字段补充）、`003`（行情标准字段）、`004`（资讯存储）和 `005`（每日复盘）；迁移重复执行不会重新建表，已应用迁移的校验标识不匹配会阻止继续启动。
 
 ## 3. 延后实现的逻辑实体
 
-`position_lots`、事件日历和 AI 复盘相关表保留在后续阶段实现。资讯已具备本地存储、持仓关联查询和 Adapter 契约，但尚未接入任何外部资讯源，也不会写入演示或虚构资讯；行情 Adapter 同样仅在被后续应用服务调用时获取并保存可追溯快照。
+`position_lots`、事件日历和 AI 复盘相关表保留在后续阶段实现。资讯已具备本地存储、持仓关联查询和 Adapter 契约，但尚未接入任何外部资讯源，也不会写入演示或虚构资讯；每日复盘仅汇总本地 Portfolio、市场快照和持仓关联资讯，不调用 AI；行情 Adapter 同样仅在被后续应用服务调用时获取并保存可追溯快照。
 
 ## 4. 关键约束与索引
 
@@ -38,6 +39,7 @@
 - `market_quotes` 必填 `data_source_id`、`market_timestamp`、`fetched_at`、`delay_status`、`source`，并以 `(security_id, data_source_id, market_timestamp)` 去重；没有任何模拟或硬编码行情写入逻辑。
 - `market_snapshots` 与 `market_quotes` 分别按来源和证券时间建立索引，支持后续可追溯查询。
 - `news_articles` 强制要求标题、来源、来源类型、发布时间、抓取时间、摘要和 HTTP(S) 原文地址；原文地址唯一，关联证券删除时仅清除关联而保留资讯审计记录。按发布时间及关联证券建立索引，持仓页查询只返回存在当前持仓关联的记录。
+- `daily_reviews.review_date` 唯一；同一日期重新生成时原子更新四个摘要和关联快照，绝不生成第二条同日复盘。快照删除时复盘保留但 `snapshot_id` 设为空，以保留生成时的结构化事实和“未确认”状态。
 
 ## 5. 派生计算（后续阶段）
 

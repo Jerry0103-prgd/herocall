@@ -6,7 +6,7 @@
 
 ## 当前状态
 
-项目已完成基础工程初始化、金融领域数据库、Portfolio Engine、Market Data Engine、Dashboard、持仓管理、设置和财经资讯页面：包含 Tauri 2、React、TypeScript、Rust、SQLite 迁移框架，纯 Rust 的移动平均成本、已实现/未实现盈亏、T+1/T+0/UNKNOWN 可卖规则计算，以及 Tushare/东方财富 Adapter、行情规范化与快照持久化。财经资讯支持本地可追溯存储、持仓关联查询与官方/媒体/社区 Adapter 契约；本阶段尚未接入外部资讯源，不写入演示或虚构新闻。Dashboard、“我的持仓”和“设置”均通过 Tauri Command 访问 Rust 服务；设置页支持安全显示 Tushare 配置状态、手工新增人民币现金账户和 SQLite 立即备份。Token 不保存或显示，数据未验证或尚无后端聚合时显示“暂无数据”。当前不包含行情调度和 AI 功能。
+项目已完成基础工程初始化、金融领域数据库、Portfolio Engine、Market Data Engine、Dashboard、持仓管理、设置、财经资讯和仓位复盘页面：包含 Tauri 2、React、TypeScript、Rust、SQLite 迁移框架，纯 Rust 的移动平均成本、已实现/未实现盈亏、T+1/T+0/UNKNOWN 可卖规则计算，以及 Tushare/东方财富 Adapter、行情规范化与快照持久化。财经资讯支持本地可追溯存储、持仓关联查询与官方/媒体/社区 Adapter 契约；本阶段尚未接入外部资讯源，不写入演示或虚构新闻。仓位复盘为不调用 AI 的本地结构化快照，汇总账户、市场、持仓贡献排序和事实性风险状态。Dashboard、“我的持仓”和“设置”均通过 Tauri Command 访问 Rust 服务；设置页支持安全显示 Tushare 配置状态、手工新增人民币现金账户和 SQLite 立即备份。Token 不保存或显示，数据未验证或尚无后端聚合时显示“暂无数据”。当前不包含行情调度和 AI 功能。
 
 ## 产品边界
 

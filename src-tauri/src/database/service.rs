@@ -145,6 +145,37 @@ pub struct NewsArticleWithSecurity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketSnapshotReference {
+    pub id: i64,
+    pub source: String,
+    pub market_timestamp: String,
+    pub fetched_at: String,
+    pub delay_status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DailyReview {
+    pub id: i64,
+    pub review_date: String,
+    pub snapshot_id: Option<i64>,
+    pub portfolio_summary: String,
+    pub market_summary: String,
+    pub holding_summary: String,
+    pub risk_summary: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewDailyReview {
+    pub review_date: String,
+    pub snapshot_id: Option<i64>,
+    pub portfolio_summary: String,
+    pub market_summary: String,
+    pub holding_summary: String,
+    pub risk_summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Holding {
     pub id: i64,
     pub cash_account_id: i64,
@@ -337,6 +368,46 @@ impl DatabaseService {
         self.get_news_article(self.connection.last_insert_rowid())
     }
 
+    pub fn upsert_daily_review(&self, input: NewDailyReview) -> DatabaseResult<DailyReview> {
+        let review_date = input.review_date.clone();
+        self.connection.execute(
+            "
+            INSERT INTO daily_reviews (
+                review_date, snapshot_id, portfolio_summary, market_summary, holding_summary, risk_summary
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ON CONFLICT(review_date) DO UPDATE SET
+                snapshot_id = excluded.snapshot_id,
+                portfolio_summary = excluded.portfolio_summary,
+                market_summary = excluded.market_summary,
+                holding_summary = excluded.holding_summary,
+                risk_summary = excluded.risk_summary
+            ",
+            params![
+                input.review_date,
+                input.snapshot_id,
+                input.portfolio_summary,
+                input.market_summary,
+                input.holding_summary,
+                input.risk_summary,
+            ],
+        )?;
+        self.get_daily_review_by_date(&review_date)
+    }
+
+    pub fn get_daily_review_by_date(&self, review_date: &str) -> DatabaseResult<DailyReview> {
+        self.connection
+            .query_row(
+                "
+                SELECT id, review_date, snapshot_id, portfolio_summary, market_summary, holding_summary,
+                       risk_summary, created_at
+                FROM daily_reviews WHERE review_date = ?1
+                ",
+                [review_date],
+                Self::map_daily_review,
+            )
+            .map_err(Into::into)
+    }
+
     pub fn get_news_article(&self, id: i64) -> DatabaseResult<NewsArticle> {
         self.connection
             .query_row(
@@ -447,6 +518,35 @@ impl DatabaseService {
                         name: row.get(0)?,
                         status: row.get(1)?,
                         last_success_at: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn latest_market_snapshot_for_review_date(
+        &self,
+        review_date: &str,
+    ) -> DatabaseResult<Option<MarketSnapshotReference>> {
+        self.connection
+            .query_row(
+                "
+                SELECT ms.id, ds.name, ms.market_timestamp, ms.fetched_at, ms.delay_status
+                FROM market_snapshots ms
+                JOIN data_sources ds ON ds.id = ms.data_source_id
+                WHERE date(datetime(ms.market_timestamp, '+8 hours')) = ?1
+                ORDER BY ms.market_timestamp DESC, ms.id DESC
+                LIMIT 1
+                ",
+                [review_date],
+                |row| {
+                    Ok(MarketSnapshotReference {
+                        id: row.get(0)?,
+                        source: row.get(1)?,
+                        market_timestamp: row.get(2)?,
+                        fetched_at: row.get(3)?,
+                        delay_status: row.get(4)?,
                     })
                 },
             )
@@ -811,6 +911,19 @@ impl DatabaseService {
             .map_err(Into::into)
     }
 
+    fn map_daily_review(row: &Row<'_>) -> rusqlite::Result<DailyReview> {
+        Ok(DailyReview {
+            id: row.get(0)?,
+            review_date: row.get(1)?,
+            snapshot_id: row.get(2)?,
+            portfolio_summary: row.get(3)?,
+            market_summary: row.get(4)?,
+            holding_summary: row.get(5)?,
+            risk_summary: row.get(6)?,
+            created_at: row.get(7)?,
+        })
+    }
+
     fn list_news_articles_by_scope(
         &self,
         scope: &str,
@@ -1038,15 +1151,16 @@ mod tests {
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN (
                     'securities', 'holdings', 'transactions', 'cash_accounts',
-                    'market_snapshots', 'market_quotes', 'data_sources', 'news_articles'
+                    'market_snapshots', 'market_quotes', 'data_sources', 'news_articles',
+                    'daily_reviews'
                 )",
                 [],
                 |row| row.get(0),
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 4);
-        assert_eq!(table_count, 8);
+        assert_eq!(migration_count, 5);
+        assert_eq!(table_count, 9);
     }
 
     #[test]
@@ -1207,8 +1321,15 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("verify news table");
+        let daily_reviews_exists: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'daily_reviews'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("verify daily review table");
 
-        assert_eq!(migration_count, 4);
+        assert_eq!(migration_count, 5);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -1220,6 +1341,7 @@ mod tests {
         );
         assert_eq!(corporate_actions_exists, 1);
         assert_eq!(news_articles_exists, 1);
+        assert_eq!(daily_reviews_exists, 1);
     }
 
     #[test]

@@ -7,6 +7,7 @@ pub mod market_service;
 mod news_service;
 pub mod portfolio_service;
 mod portfolio_ui_service;
+mod review_service;
 mod settings_service;
 
 use dashboard_service::{AssetSummaryView, DashboardService, MarketIndexQuoteView};
@@ -14,6 +15,7 @@ use news_service::{NewsArticleView, NewsService};
 use portfolio_ui_service::{
     CreateHoldingInput, PortfolioHoldingView, PortfolioUiService, UpdateHoldingInput,
 };
+use review_service::{DailyReviewView, ReviewService};
 use settings_service::{
     BackupView, CashAccountView, CreateCashAccountInput, SettingsService, SettingsStatusView,
 };
@@ -104,6 +106,23 @@ fn get_holding_news_articles(app: tauri::AppHandle) -> Result<Vec<NewsArticleVie
     NewsService::list_for_holdings(&database).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn get_daily_review(app: tauri::AppHandle, review_date: String) -> Result<DailyReviewView, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    ReviewService::get(&database, &review_date).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn generate_daily_review(
+    app: tauri::AppHandle,
+    review_date: String,
+) -> Result<DailyReviewView, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    ReviewService::generate(&database, &review_date).map_err(|error| error.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -122,7 +141,9 @@ pub fn run() {
             get_cash_accounts,
             create_cash_account,
             create_database_backup,
-            get_holding_news_articles
+            get_holding_news_articles,
+            get_daily_review,
+            generate_daily_review
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AStock AI Workbench");

@@ -5,6 +5,7 @@ import { ComingSoonPage } from "./pages/ComingSoonPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { NewsPage } from "./pages/NewsPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
+import { ReviewPage } from "./pages/ReviewPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
 const pageTitles: Record<Exclude<PageId, "dashboard">, string> = {
@@ -23,9 +24,10 @@ function App() {
       <Sidebar activePage={activePage} onNavigate={setActivePage} />
       {activePage === "dashboard" ? <DashboardPage /> : null}
       {activePage === "news" ? <NewsPage /> : null}
+      {activePage === "review" ? <ReviewPage /> : null}
       {activePage === "holdings" ? <PortfolioPage /> : null}
       {activePage === "settings" ? <SettingsPage /> : null}
-      {activePage !== "dashboard" && activePage !== "news" && activePage !== "holdings" && activePage !== "settings" ? <ComingSoonPage title={pageTitles[activePage]} /> : null}
+      {activePage !== "dashboard" && activePage !== "news" && activePage !== "review" && activePage !== "holdings" && activePage !== "settings" ? <ComingSoonPage title={pageTitles[activePage]} /> : null}
     </main>
   );
 }

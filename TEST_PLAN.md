@@ -37,6 +37,7 @@
 17. Portfolio UI 经 Tauri Command 完成本地持仓新增、修改、删除、查询；成本金额、可卖数量、市值和今日盈亏只在 Rust Portfolio/Market 服务中计算。无持仓显示“暂无持仓”，无有效行情时当前价、市值、今日盈亏、总盈亏与涨跌幅显示“暂无数据”，不得由前端填补或运算。
 18. Settings UI 经 Tauri Command 读取 Tushare 的安全配置状态、系统数据库/行情状态和最后同步时间；任何 Token 均不得出现在 Command 返回值、前端、SQLite 或日志。手工新增现金账户只接受 `CNY` 与非负精确 decimal 金额。SQLite 立即备份须生成可重新打开的一致性副本，保存至 Documents/AStock-AI-Workbench/backups，且不能覆盖已有备份。
 19. News Service 的资讯 CRUD、关联证券校验、持仓关联查询和 004 迁移均须通过。每条测试记录必须具备来源、`OFFICIAL`/`MEDIA`/`COMMUNITY` 类型、带时区发布时间、抓取时间、摘要和 HTTP(S) 原文地址；页面只读取 Rust Command 返回的持仓关联资讯，空态显示“暂无与持仓关联的资讯”，社区记录显式展示“社区观点 · COMMUNITY”。
+20. Review Service 的 005 迁移、同日复盘生成/读取、市场快照关联和持仓今日盈亏贡献排序均须通过。复盘仅能读取已保存的 Portfolio、市场快照和持仓关联资讯；没有完整账户汇总、有效指数或当日快照时分别显示“暂无数据/未确认”。风险提示只可输出数据状态的事实，测试拒绝买卖建议、收益预测与收益承诺。Review UI 经 Tauri Command 展示日期、账户表现、市场表现、持仓影响与风险事实。
 
 ## 4. 质量门禁
 
