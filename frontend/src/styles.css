@@ -168,6 +168,8 @@ tbody tr:hover { background: #142138; }
 .risk-card ul { display: grid; gap: 9px; margin: 16px 0 0; padding-left: 20px; color: #c4d0dd; font-size: 13px; line-height: 1.6; }
 .ai-review-section { margin-top: 35px; }
 .ai-empty-state { padding: 20px; color: #aab8c8; font-size: 13px; }
+.ai-generation-status { margin: 0 0 12px; color: #8fa1b8; font-size: 12px; }
+.ai-error-state { border: 1px solid #8a4a53; color: #ffc1c8; }
 .ai-review-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .ai-section { min-height: 180px; padding: 19px; }
 .ai-section h3 { margin-bottom: 15px; color: #83dfbd; font-size: 12px; letter-spacing: .08em; }

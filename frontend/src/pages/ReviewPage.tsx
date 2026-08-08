@@ -3,6 +3,8 @@ import { useCallback, useEffect, useState } from "react";
 import { generateAiReview, loadAiServiceStatus, loadLatestAiReview, type AiReview, type AiServiceStatus } from "../services/ai";
 import { generateDailyReview, loadDailyReview, type DailyReview } from "../services/review";
 
+type AiGenerationState = "idle" | "generating" | "success" | "failed";
+
 function chinaToday() {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
@@ -23,7 +25,8 @@ export function ReviewPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [aiStatus, setAiStatus] = useState<AiServiceStatus | null>(null);
   const [aiReview, setAiReview] = useState<AiReview | null>(null);
-  const [isAiGenerating, setIsAiGenerating] = useState(false);
+  const [aiGenerationState, setAiGenerationState] = useState<AiGenerationState>("idle");
+  const [aiError, setAiError] = useState<string | null>(null);
 
   const load = useCallback(async (date: string) => {
     setIsLoading(true);
@@ -48,9 +51,20 @@ export function ReviewPage() {
   useEffect(() => {
     if (!review || !aiStatus?.configured) {
       setAiReview(null);
+      setAiGenerationState("idle");
+      setAiError(null);
       return;
     }
-    void loadLatestAiReview(review.id).then(setAiReview).catch(() => setAiReview(null));
+    void loadLatestAiReview(review.id)
+      .then((stored) => {
+        setAiReview(stored);
+        setAiGenerationState(stored ? "success" : "idle");
+      })
+      .catch((error) => {
+        setAiReview(null);
+        setAiGenerationState("failed");
+        setAiError(error instanceof Error ? error.message : "无法读取已保存的AI复盘");
+      });
   }, [aiStatus?.configured, review]);
 
   async function generate() {
@@ -67,14 +81,18 @@ export function ReviewPage() {
 
   async function generateAi() {
     if (!review) return;
-    setIsAiGenerating(true);
+    setAiGenerationState("generating");
+    setAiError(null);
     try {
       setAiReview(await generateAiReview(review.reviewDate));
+      setAiGenerationState("success");
       setMessage("AI辅助分析已生成");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "AI辅助分析生成失败");
-    } finally {
-      setIsAiGenerating(false);
+      const detail = error instanceof Error ? error.message : "AI辅助分析生成失败";
+      setAiReview(null);
+      setAiGenerationState("failed");
+      setAiError(detail);
+      setMessage(`AI复盘生成失败：${detail}`);
     }
   }
 
@@ -103,11 +121,14 @@ export function ReviewPage() {
       </div> : null}
 
       <section className="review-section ai-review-section" aria-labelledby="ai-review-title">
-        <div className="section-heading"><div><p className="section-kicker">AI assistance</p><h2 id="ai-review-title">AI复盘</h2></div>{aiStatus?.configured && review ? <button className="secondary-button" disabled={isAiGenerating} onClick={() => void generateAi()} type="button">{isAiGenerating ? "正在生成…" : "生成AI复盘"}</button> : null}</div>
+        <div className="section-heading"><div><p className="section-kicker">AI assistance</p><h2 id="ai-review-title">AI复盘</h2></div>{aiStatus?.configured && review ? <button className="secondary-button" disabled={aiGenerationState === "generating"} onClick={() => void generateAi()} type="button">{aiGenerationState === "generating" ? "正在生成…" : "生成AI复盘"}</button> : null}</div>
+        <p className="ai-generation-status" role="status">AI生成状态：{aiGenerationState}</p>
         {!aiStatus ? <div className="settings-card ai-empty-state">AI服务状态暂不可用</div> : null}
         {aiStatus && !aiStatus.configured ? <div className="settings-card ai-empty-state">AI服务未配置</div> : null}
         {aiStatus?.configured && !review ? <div className="settings-card ai-empty-state">请先生成当日结构化复盘</div> : null}
-        {aiStatus?.configured && review && !aiReview ? <div className="settings-card ai-empty-state">尚未生成AI辅助分析</div> : null}
+        {aiGenerationState === "generating" ? <div className="settings-card ai-empty-state">正在向 DeepSeek 请求结构化复盘，请稍候。</div> : null}
+        {aiGenerationState === "failed" && aiError ? <div className="settings-card ai-empty-state ai-error-state" role="alert">生成失败：{aiError}</div> : null}
+        {aiStatus?.configured && review && !aiReview && aiGenerationState === "idle" ? <div className="settings-card ai-empty-state">尚未生成AI辅助分析</div> : null}
         {aiStatus?.configured && aiReview ? <div className="ai-review-grid"><section className="settings-card ai-section"><h3>FACTS</h3><ul>{aiReview.facts.map((item) => <li key={item}>{item}</li>)}</ul></section><section className="settings-card ai-section"><h3>INFERENCES</h3><ul>{aiReview.inferences.map((item) => <li key={item}>{item}</li>)}</ul></section><section className="settings-card ai-section"><h3>RISKS</h3><ul>{aiReview.risks.map((item) => <li key={item}>{item}</li>)}</ul></section></div> : null}
       </section>
     </section>

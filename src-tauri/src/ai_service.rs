@@ -107,7 +107,7 @@ pub struct DeepSeekProviderAdapter {
 impl DeepSeekProviderAdapter {
     fn from_keychain() -> Result<Self, AiServiceError> {
         Self::from_key(
-            load_deepseek_api_key_for_adapter().map_err(|_| AiServiceError::NotConfigured)?,
+            load_deepseek_api_key_for_adapter().map_err(|_| AiServiceError::KeychainUnavailable)?,
         )
     }
     fn from_key(key: Option<String>) -> Result<Self, AiServiceError> {
@@ -155,6 +155,7 @@ pub enum AiServiceError {
     Serialization(serde_json::Error),
     InvalidOutput(&'static str),
     NotConfigured,
+    KeychainUnavailable,
     NoManualSnapshot,
 }
 impl fmt::Display for AiServiceError {
@@ -166,6 +167,7 @@ impl fmt::Display for AiServiceError {
             Self::Serialization(e) => write!(f, "AI review serialization error: {e}"),
             Self::InvalidOutput(m) => f.write_str(m),
             Self::NotConfigured => f.write_str("AI服务未配置"),
+            Self::KeychainUnavailable => f.write_str("无法读取系统钥匙串中的 DeepSeek API Key"),
             Self::NoManualSnapshot => f.write_str("请先更新今日市场快照"),
         }
     }

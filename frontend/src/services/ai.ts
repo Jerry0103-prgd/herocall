@@ -39,5 +39,5 @@ export function loadLatestAiReview(reviewId: number): Promise<AiReview | null> {
 }
 
 export function generateAiReview(reviewDate: string): Promise<AiReview> {
-  return invoke<AiReview>("generate_ai_review", { reviewDate });
+  return invoke<AiReview>("generate_ai_review_for_snapshot", { reviewDate });
 }

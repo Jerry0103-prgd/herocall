@@ -208,7 +208,10 @@ fn get_latest_ai_review(
 }
 
 #[tauri::command]
-fn generate_ai_review(app: tauri::AppHandle, review_date: String) -> Result<AiReviewView, String> {
+fn generate_ai_review_for_snapshot(
+    app: tauri::AppHandle,
+    review_date: String,
+) -> Result<AiReviewView, String> {
     let database = database::service::DatabaseService::open_app_database(&app)
         .map_err(|error| error.to_string())?;
     AiService::generate_from_runtime(&database, &review_date).map_err(|error| error.to_string())
@@ -269,7 +272,7 @@ pub fn run() {
             generate_daily_review,
             get_ai_service_status,
             get_latest_ai_review,
-            generate_ai_review,
+            generate_ai_review_for_snapshot,
             get_calendar_events,
             get_initialization_status,
             complete_initialization
