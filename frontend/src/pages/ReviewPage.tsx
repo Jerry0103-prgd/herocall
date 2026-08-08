@@ -114,7 +114,7 @@ export function ReviewPage() {
           <h1 id="review-title">仓位复盘</h1>
           <p>仅汇总本地 Portfolio、市场快照和持仓关联资讯；AI 仅作结构化解释，不提供预测或买卖建议。</p>
         </div>
-        <div className="review-actions"><label>复盘日期<input aria-label="复盘日期" onChange={(event) => setReviewDate(event.target.value)} type="date" value={reviewDate} /></label><button className="primary-button" disabled={isGenerating} onClick={() => void generate()} type="button">{isGenerating ? "正在生成…" : "生成当日复盘"}</button></div>
+        <div className="review-actions"><label>复盘日期<input aria-label="复盘日期" onChange={(event) => setReviewDate(event.target.value)} type="date" value={reviewDate} /></label><button className="primary-button review-generate-button" disabled={isGenerating} onClick={() => void generate()} type="button">{isGenerating ? "正在生成…" : "生成AI复盘"}</button></div>
       </header>
 
       {message ? <p className="notice" role="status">{message}</p> : null}

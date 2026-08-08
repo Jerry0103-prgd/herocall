@@ -30,10 +30,10 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
   return (
     <aside className="sidebar" aria-label="主导航">
       <div className="brand">
-        <span className="brand-mark" aria-hidden="true">A</span>
+        <span className="brand-mark" aria-hidden="true">H</span>
         <div>
-          <strong>AStock</strong>
-          <span>AI Workbench</span>
+          <strong>Hero Call</strong>
+          <span>AI Portfolio Assistant</span>
         </div>
       </div>
 

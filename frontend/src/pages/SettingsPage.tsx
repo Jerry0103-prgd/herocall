@@ -194,7 +194,7 @@ export function SettingsPage() {
 
       <section className="settings-section" aria-labelledby="backup-title">
         <div className="section-heading"><div><p className="section-kicker">Backup</p><h2 id="backup-title">本地备份</h2></div></div>
-        <div className="settings-card backup-card"><div><strong>SQLite 数据库备份</strong><p>备份文件保存在 Documents/AStock-AI-Workbench/backups，不覆盖已有备份。</p></div><button className="secondary-button" disabled={isBackingUp} onClick={() => void backup()} type="button">{isBackingUp ? "正在备份…" : "立即备份"}</button></div>
+        <div className="settings-card backup-card"><div><strong>SQLite 数据库备份</strong><p>备份文件保存在本机 Documents 下的应用备份目录，不覆盖已有备份。</p></div><button className="secondary-button" disabled={isBackingUp} onClick={() => void backup()} type="button">{isBackingUp ? "正在备份…" : "立即备份"}</button></div>
       </section>
     </section>
   );
