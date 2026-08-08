@@ -374,6 +374,32 @@ impl DatabaseService {
         Self::open(app_data_dir.join("astock-ai-workbench.sqlite3"))
     }
 
+    /// Persists non-sensitive application state. Provider keys must never use this store.
+    pub fn set_app_setting(&self, key: &str, value: &str) -> DatabaseResult<()> {
+        self.connection.execute(
+            "
+            INSERT INTO app_settings (setting_key, setting_value)
+            VALUES (?1, ?2)
+            ON CONFLICT(setting_key) DO UPDATE SET
+                setting_value = excluded.setting_value,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            ",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_app_setting(&self, key: &str) -> DatabaseResult<Option<String>> {
+        self.connection
+            .query_row(
+                "SELECT setting_value FROM app_settings WHERE setting_key = ?1",
+                [key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     pub fn create_security(&self, input: NewSecurity) -> DatabaseResult<Security> {
         self.connection.execute(
             "
@@ -1385,15 +1411,15 @@ mod tests {
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN (
                     'securities', 'holdings', 'transactions', 'cash_accounts',
                     'market_snapshots', 'market_quotes', 'data_sources', 'news_articles',
-                    'daily_reviews', 'ai_reviews', 'events'
+                    'daily_reviews', 'ai_reviews', 'events', 'app_settings'
                 )",
                 [],
                 |row| row.get(0),
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 7);
-        assert_eq!(table_count, 11);
+        assert_eq!(migration_count, 8);
+        assert_eq!(table_count, 12);
     }
 
     #[test]
@@ -1512,7 +1538,7 @@ mod tests {
             )
             .expect("insert legacy transaction");
 
-        migrations::apply(&mut connection).expect("upgrade database through 004");
+        migrations::apply(&mut connection).expect("upgrade database through latest migration");
 
         let migration_count: i64 = connection
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
@@ -1575,8 +1601,15 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("verify event table");
+        let app_settings_exists: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("verify app settings table");
 
-        assert_eq!(migration_count, 7);
+        assert_eq!(migration_count, 8);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -1591,6 +1624,7 @@ mod tests {
         assert_eq!(daily_reviews_exists, 1);
         assert_eq!(ai_reviews_exists, 1);
         assert_eq!(events_exists, 1);
+        assert_eq!(app_settings_exists, 1);
     }
 
     #[test]

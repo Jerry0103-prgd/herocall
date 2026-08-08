@@ -7,7 +7,7 @@
 ## 2. 分层
 
 ```text
-React/TypeScript UI（侧栏、Dashboard、Portfolio、Settings、News、Review、EventCalendar 页面）
+React/TypeScript UI（侧栏、Dashboard、Portfolio、Settings、News、Review、EventCalendar 页面、首次启动向导）
   └─ Tauri command / event 边界
        └─ Rust application services（含只读 Dashboard 查询服务）
             ├─ Domain：持仓、交易、T+1、盈亏、复盘规则
@@ -43,6 +43,8 @@ Phase 6-B 的仓位复盘页面通过 `get_daily_review` 与 `generate_daily_rev
 Phase 6-C 的 AI 复盘区通过 `get_ai_service_status`、`get_latest_ai_review` 和 `generate_ai_review` Command 访问 `ai_service`。`ai_service` 组装已保存的每日复盘（含市场快照）、Portfolio 持仓和持仓关联资讯，再交给 `AiProviderAdapter`；UI 不接触模型或 Key。当前 `OpenAiCompatibleAdapter` 只在 `AI_API_KEY`（或 `OPENAI_API_KEY`）、`AI_BASE_URL` 和 `AI_MODEL` 均存在时启用，密钥仅经运行时环境读取，并通过 `curl` 的标准输入传递授权头，不进入参数、日志、SQLite 或前端。模型返回值必须是 JSON 的 `FACTS`、`INFERENCES`、`RISKS` 三段；保存前拒绝买卖推荐、目标价、收益预测/承诺等禁止语言。
 
 Phase 6-D 的事件日历页面通过 `get_calendar_events` Command 访问 `event_service`。服务保存和验证事件类型、原始带时区时间、来源、可选原文地址、确认状态及证券关联；`EventDataAdapter` 是未来官方、媒体或宏观日历来源的预留接口。本阶段不接入外部事件抓取，不猜测事件日期。默认查询把当前持仓关联事件置前，再按实际事件时间升序排列；UI 可按确认状态过滤。
+
+Phase 7-A 的首次启动向导通过 `get_initialization_status` 与 `complete_initialization` Command 访问 `initialization_service`。服务只在 SQLite 的 `app_settings` 保存非敏感完成标志；向导中的现金和初始持仓分别复用既有 `settings_service`、`portfolio_ui_service` Command，数据源步骤只读取安全的“已配置/未配置”状态。所有步骤均可跳过，向导不保存 Token、不连接券商，也不请求行情或 AI 服务。
 
 ## 4. 数据流与质量控制
 
