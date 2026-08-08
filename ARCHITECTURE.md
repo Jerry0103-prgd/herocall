@@ -46,6 +46,8 @@ Phase 6-D 的事件日历页面通过 `get_calendar_events` Command 访问 `even
 
 Phase 7-A 的首次启动向导通过 `get_initialization_status` 与 `complete_initialization` Command 访问 `initialization_service`。服务只在 SQLite 的 `app_settings` 保存非敏感完成标志；向导中的现金和初始持仓分别复用既有 `settings_service`、`portfolio_ui_service` Command，数据源步骤只读取安全的“已配置/未配置”状态。所有步骤均可跳过，向导不保存 Token、不连接券商，也不请求行情或 AI 服务。
 
+Phase 7-D1 的 Dashboard 通过 `refresh_tushare_market_data` Command 调用 `market_refresh_service`。该服务仅选择当前持仓证券，经 `TushareAdapter` 的日线接口获取收盘数据，标准化后保存为带来源、行情时间、抓取时间和 `CLOSED` 状态的 SQLite 快照；前端永不接收 Token。缺少 `TUSHARE_TOKEN` 时保存安全的来源 `NO_DATA` 状态并返回“未配置”，不请求备用来源、更不生成价格。资产摘要完全在 Rust 中由现金账户、Portfolio Service 的有效估值和同一最新快照聚合；若任一持仓缺少可用于估值的行情，相关汇总返回空值。
+
 ## 4. 数据流与质量控制
 
 1. Scheduler 或用户手动刷新调用 Provider Port。

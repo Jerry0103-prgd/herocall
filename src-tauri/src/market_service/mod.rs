@@ -421,6 +421,16 @@ impl TushareAdapter {
                 "TUSHARE_TOKEN is not configured",
             ))
     }
+
+    /// This returns only a boolean so callers can communicate configuration state without ever
+    /// returning, persisting, or logging the token itself.
+    pub fn is_configured() -> bool {
+        Self::has_token(env::var("TUSHARE_TOKEN").ok().as_deref())
+    }
+
+    fn has_token(token: Option<&str>) -> bool {
+        token.is_some_and(|value| !value.trim().is_empty())
+    }
 }
 
 impl MarketDataAdapter for TushareAdapter {
@@ -994,5 +1004,12 @@ mod tests {
         assert_eq!(quotes[0].previous_close, decimal("1490.5"));
         assert_eq!(quotes[0].volume_unit, "LOTS");
         assert_eq!(quotes[0].turnover_unit, "THOUSAND_CNY");
+    }
+
+    #[test]
+    fn tushare_configuration_status_never_exposes_the_token() {
+        assert!(TushareAdapter::has_token(Some("runtime-secret")));
+        assert!(!TushareAdapter::has_token(Some("  ")));
+        assert!(!TushareAdapter::has_token(None));
     }
 }

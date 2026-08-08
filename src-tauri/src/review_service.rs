@@ -11,7 +11,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    dashboard_service::DashboardService,
+    dashboard_service::{DashboardError, DashboardService},
     database::service::{DailyReview, DatabaseError, DatabaseService, NewDailyReview},
     news_service::{NewsService, NewsServiceError},
     portfolio_ui_service::{PortfolioUiError, PortfolioUiService},
@@ -92,6 +92,7 @@ pub struct DailyReviewView {
 #[derive(Debug)]
 pub enum ReviewServiceError {
     Database(DatabaseError),
+    Dashboard(DashboardError),
     Portfolio(PortfolioUiError),
     News(NewsServiceError),
     Serialization(serde_json::Error),
@@ -103,6 +104,7 @@ impl fmt::Display for ReviewServiceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Database(error) => write!(formatter, "database error: {error}"),
+            Self::Dashboard(error) => write!(formatter, "dashboard error: {error}"),
             Self::Portfolio(error) => write!(formatter, "portfolio error: {error}"),
             Self::News(error) => write!(formatter, "news error: {error}"),
             Self::Serialization(error) => write!(formatter, "review serialization error: {error}"),
@@ -117,6 +119,12 @@ impl Error for ReviewServiceError {}
 impl From<DatabaseError> for ReviewServiceError {
     fn from(error: DatabaseError) -> Self {
         Self::Database(error)
+    }
+}
+
+impl From<DashboardError> for ReviewServiceError {
+    fn from(error: DashboardError) -> Self {
+        Self::Dashboard(error)
     }
 }
 
@@ -149,7 +157,7 @@ impl ReviewService {
         let holdings = PortfolioUiService::list(database)?;
         let related_news = NewsService::list_for_holdings(database)?;
         let snapshot = database.latest_market_snapshot_for_review_date(review_date)?;
-        let asset_summary = DashboardService::load_asset_summary(database);
+        let asset_summary = DashboardService::load_asset_summary(database)?;
 
         let portfolio_summary = ReviewPortfolioSummary {
             total_assets: asset_summary.total_assets,

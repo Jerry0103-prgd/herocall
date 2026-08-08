@@ -7,6 +7,7 @@ mod database;
 // Phase 6-D defines the future Adapter ingestion/CRUD API; calendar UI is read-only.
 mod event_service;
 mod initialization_service;
+mod market_refresh_service;
 pub mod market_service;
 #[allow(dead_code)] // Phase 6-A defines the future Adapter ingestion/CRUD API; UI is read-only.
 mod news_service;
@@ -19,6 +20,7 @@ use ai_service::{AiReviewView, AiService, AiServiceStatusView};
 use dashboard_service::{AssetSummaryView, DashboardService, MarketIndexQuoteView};
 use event_service::{EventService, EventView};
 use initialization_service::{InitializationService, InitializationStatusView};
+use market_refresh_service::{MarketRefreshService, MarketRefreshView};
 use news_service::{NewsArticleView, NewsService};
 use portfolio_ui_service::{
     CreateHoldingInput, PortfolioHoldingView, PortfolioUiService, UpdateHoldingInput,
@@ -32,7 +34,7 @@ use settings_service::{
 fn get_asset_summary(app: tauri::AppHandle) -> Result<AssetSummaryView, String> {
     let database = database::service::DatabaseService::open_app_database(&app)
         .map_err(|error| error.to_string())?;
-    Ok(DashboardService::load_asset_summary(&database))
+    DashboardService::load_asset_summary(&database).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -40,6 +42,16 @@ fn get_market_snapshot(app: tauri::AppHandle) -> Result<Vec<MarketIndexQuoteView
     let database = database::service::DatabaseService::open_app_database(&app)
         .map_err(|error| error.to_string())?;
     Ok(DashboardService::load_market_snapshot(&database))
+}
+
+/// Refreshes only the user's existing holdings through Tushare's source-backed daily endpoint.
+/// The command never accepts a token from the UI and never substitutes another provider when it
+/// is unconfigured or unavailable.
+#[tauri::command]
+fn refresh_tushare_market_data(app: tauri::AppHandle) -> Result<MarketRefreshView, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    MarketRefreshService::refresh_tushare(&database).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -187,6 +199,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_asset_summary,
             get_market_snapshot,
+            refresh_tushare_market_data,
             get_portfolio_holdings,
             create_portfolio_holding,
             update_portfolio_holding,

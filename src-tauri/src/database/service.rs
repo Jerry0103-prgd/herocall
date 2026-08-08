@@ -6,7 +6,9 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use tauri::Manager;
 
 use super::migrations;
-use crate::market_service::{MarketSnapshot, MarketSnapshotStore, MarketStatus, MarketStoreError};
+use crate::market_service::{
+    MarketSecurity, MarketSnapshot, MarketSnapshotStore, MarketStatus, MarketStoreError,
+};
 
 pub type DatabaseResult<T> = Result<T, DatabaseError>;
 
@@ -721,6 +723,40 @@ impl DatabaseService {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Returns only securities currently held by the user, which defines the safe refresh scope.
+    /// The refresh service never invents a watchlist or asks a provider for arbitrary symbols.
+    pub fn list_market_securities_for_holdings(&self) -> DatabaseResult<Vec<MarketSecurity>> {
+        let mut statement = self.connection.prepare(
+            "
+            SELECT DISTINCT s.id, s.symbol, s.name, s.market
+            FROM holdings h
+            JOIN securities s ON s.id = h.security_id
+            WHERE h.quantity > 0
+            ORDER BY s.market, s.symbol
+            ",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(MarketSecurity {
+                security_id: row.get(0)?,
+                symbol: row.get(1)?,
+                name: row.get(2)?,
+                market: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn has_confirmed_transactions(&self) -> DatabaseResult<bool> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM transactions WHERE status = 'CONFIRMED')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|exists| exists != 0)
+            .map_err(Into::into)
+    }
+
     pub fn next_cny_cash_account_name(&self) -> DatabaseResult<String> {
         let count: i64 = self.connection.query_row(
             "SELECT COUNT(*) FROM cash_accounts WHERE name LIKE '人民币现金账户%'",
@@ -771,6 +807,50 @@ impl DatabaseService {
                 LIMIT 1
                 ",
                 [review_date],
+                |row| {
+                    Ok(MarketSnapshotReference {
+                        id: row.get(0)?,
+                        source: row.get(1)?,
+                        market_timestamp: row.get(2)?,
+                        fetched_at: row.get(3)?,
+                        delay_status: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// Returns a snapshot only when it is the latest quote source for every current holding. This
+    /// lets aggregate valuation disclose one precise source/time rather than claiming a mixed or
+    /// stale set of quotes comes from a single refresh.
+    pub fn latest_market_snapshot_for_current_holdings(
+        &self,
+    ) -> DatabaseResult<Option<MarketSnapshotReference>> {
+        self.connection
+            .query_row(
+                "
+                SELECT ms.id, ds.name, ms.market_timestamp, ms.fetched_at, ms.delay_status
+                FROM market_snapshots ms
+                JOIN data_sources ds ON ds.id = ms.data_source_id
+                WHERE ms.delay_status IN ('REALTIME', 'CLOSED')
+                  AND EXISTS (SELECT 1 FROM holdings WHERE quantity > 0)
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM holdings h
+                    WHERE h.quantity > 0
+                      AND COALESCE((
+                        SELECT q.market_snapshot_id
+                        FROM market_quotes q
+                        WHERE q.security_id = h.security_id
+                        ORDER BY q.market_timestamp DESC, q.id DESC
+                        LIMIT 1
+                      ), -1) != ms.id
+                  )
+                ORDER BY ms.id DESC
+                LIMIT 1
+                ",
+                [],
                 |row| {
                     Ok(MarketSnapshotReference {
                         id: row.get(0)?,
