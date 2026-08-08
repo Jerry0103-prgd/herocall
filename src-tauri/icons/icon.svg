@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">AStock AI Workbench</title>
+  <rect width="512" height="512" rx="112" fill="#0f3d7a"/>
+  <path d="M112 356 196 166l60 118 52-92 92 164" fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="34"/>
+  <circle cx="196" cy="166" r="20" fill="#4ade80"/>
+  <circle cx="256" cy="284" r="20" fill="#4ade80"/>
+  <circle cx="308" cy="192" r="20" fill="#4ade80"/>
+  <circle cx="400" cy="356" r="20" fill="#4ade80"/>
+</svg>
