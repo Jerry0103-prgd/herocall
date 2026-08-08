@@ -38,6 +38,7 @@
 18. Settings UI 经 Tauri Command 读取 Tushare 的安全配置状态、系统数据库/行情状态和最后同步时间；任何 Token 均不得出现在 Command 返回值、前端、SQLite 或日志。手工新增现金账户只接受 `CNY` 与非负精确 decimal 金额。SQLite 立即备份须生成可重新打开的一致性副本，保存至 Documents/AStock-AI-Workbench/backups，且不能覆盖已有备份。
 19. News Service 的资讯 CRUD、关联证券校验、持仓关联查询和 004 迁移均须通过。每条测试记录必须具备来源、`OFFICIAL`/`MEDIA`/`COMMUNITY` 类型、带时区发布时间、抓取时间、摘要和 HTTP(S) 原文地址；页面只读取 Rust Command 返回的持仓关联资讯，空态显示“暂无与持仓关联的资讯”，社区记录显式展示“社区观点 · COMMUNITY”。
 20. Review Service 的 005 迁移、同日复盘生成/读取、市场快照关联和持仓今日盈亏贡献排序均须通过。复盘仅能读取已保存的 Portfolio、市场快照和持仓关联资讯；没有完整账户汇总、有效指数或当日快照时分别显示“暂无数据/未确认”。风险提示只可输出数据状态的事实，测试拒绝买卖建议、收益预测与收益承诺。Review UI 经 Tauri Command 展示日期、账户表现、市场表现、持仓影响与风险事实。
+21. AI Service 的 006 迁移、无完整运行时配置状态、Provider Adapter 契约、`FACTS`/`INFERENCES`/`RISKS` JSON 结构、持久化审计字段与禁止词拦截均须通过。AI 只接收已保存每日复盘（含快照）、Portfolio 和持仓关联资讯；UI 不能直接调用 Provider。任何输出包含买入、卖出、加减仓、推荐、目标价、收益预测/承诺、保证收益或必涨等内容时必须拒绝保存和展示。API Key 不得出现在进程参数、日志、SQLite、Command 返回值或前端。
 
 ## 4. 质量门禁
 

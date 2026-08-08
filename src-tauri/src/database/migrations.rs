@@ -34,6 +34,11 @@ const MIGRATIONS: &[Migration] = &[
         checksum: "daily-reviews-005-v1",
         sql: include_str!("../../migrations/005_daily_reviews.sql"),
     },
+    Migration {
+        version: "006",
+        checksum: "ai-reviews-006-v1",
+        sql: include_str!("../../migrations/006_ai_reviews.sql"),
+    },
 ];
 
 pub(super) fn apply(connection: &mut Connection) -> DatabaseResult<()> {

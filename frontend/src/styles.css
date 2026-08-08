@@ -160,6 +160,12 @@ tbody tr:hover { background: #142138; }
 .review-contribution > div span { color: #8293aa; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
 .risk-card { padding: 20px; }
 .risk-card ul { display: grid; gap: 9px; margin: 16px 0 0; padding-left: 20px; color: #c4d0dd; font-size: 13px; line-height: 1.6; }
+.ai-review-section { margin-top: 35px; }
+.ai-empty-state { padding: 20px; color: #aab8c8; font-size: 13px; }
+.ai-review-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.ai-section { min-height: 180px; padding: 19px; }
+.ai-section h3 { margin-bottom: 15px; color: #83dfbd; font-size: 12px; letter-spacing: .08em; }
+.ai-section ul { display: grid; gap: 9px; margin: 0; padding-left: 18px; color: #c3cfdd; font-size: 12px; line-height: 1.6; }
 
 @media (max-width: 1050px) {
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -168,6 +174,7 @@ tbody tr:hover { background: #142138; }
   .news-card-heading { display: grid; }
   .news-related-security { text-align: left; }
   .review-metrics, .review-index-list { grid-template-columns: 1fr; }
+  .ai-review-grid { grid-template-columns: 1fr; }
   .review-contribution { grid-template-columns: 1fr; gap: 8px; }
   .review-actions { align-items: stretch; flex-direction: column; }
 }

@@ -176,6 +176,28 @@ pub struct NewDailyReview {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiReview {
+    pub id: i64,
+    pub review_id: i64,
+    pub model: String,
+    pub prompt_version: String,
+    pub facts: String,
+    pub inferences: String,
+    pub risks: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAiReview {
+    pub review_id: i64,
+    pub model: String,
+    pub prompt_version: String,
+    pub facts: String,
+    pub inferences: String,
+    pub risks: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Holding {
     pub id: i64,
     pub cash_account_id: i64,
@@ -392,6 +414,56 @@ impl DatabaseService {
             ],
         )?;
         self.get_daily_review_by_date(&review_date)
+    }
+
+    pub fn create_ai_review(&self, input: NewAiReview) -> DatabaseResult<AiReview> {
+        self.connection.execute(
+            "
+            INSERT INTO ai_reviews (review_id, model, prompt_version, facts, inferences, risks)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ",
+            params![
+                input.review_id,
+                input.model,
+                input.prompt_version,
+                input.facts,
+                input.inferences,
+                input.risks,
+            ],
+        )?;
+        self.get_ai_review(self.connection.last_insert_rowid())
+    }
+
+    pub fn get_ai_review(&self, id: i64) -> DatabaseResult<AiReview> {
+        self.connection
+            .query_row(
+                "
+                SELECT id, review_id, model, prompt_version, facts, inferences, risks, created_at
+                FROM ai_reviews WHERE id = ?1
+                ",
+                [id],
+                Self::map_ai_review,
+            )
+            .map_err(Into::into)
+    }
+
+    pub fn latest_ai_review_for_daily_review(
+        &self,
+        review_id: i64,
+    ) -> DatabaseResult<Option<AiReview>> {
+        self.connection
+            .query_row(
+                "
+                SELECT id, review_id, model, prompt_version, facts, inferences, risks, created_at
+                FROM ai_reviews WHERE review_id = ?1
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                ",
+                [review_id],
+                Self::map_ai_review,
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     pub fn get_daily_review_by_date(&self, review_date: &str) -> DatabaseResult<DailyReview> {
@@ -924,6 +996,19 @@ impl DatabaseService {
         })
     }
 
+    fn map_ai_review(row: &Row<'_>) -> rusqlite::Result<AiReview> {
+        Ok(AiReview {
+            id: row.get(0)?,
+            review_id: row.get(1)?,
+            model: row.get(2)?,
+            prompt_version: row.get(3)?,
+            facts: row.get(4)?,
+            inferences: row.get(5)?,
+            risks: row.get(6)?,
+            created_at: row.get(7)?,
+        })
+    }
+
     fn list_news_articles_by_scope(
         &self,
         scope: &str,
@@ -1152,15 +1237,15 @@ mod tests {
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN (
                     'securities', 'holdings', 'transactions', 'cash_accounts',
                     'market_snapshots', 'market_quotes', 'data_sources', 'news_articles',
-                    'daily_reviews'
+                    'daily_reviews', 'ai_reviews'
                 )",
                 [],
                 |row| row.get(0),
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 5);
-        assert_eq!(table_count, 9);
+        assert_eq!(migration_count, 6);
+        assert_eq!(table_count, 10);
     }
 
     #[test]
@@ -1328,8 +1413,15 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("verify daily review table");
+        let ai_reviews_exists: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ai_reviews'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("verify AI review table");
 
-        assert_eq!(migration_count, 5);
+        assert_eq!(migration_count, 6);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -1342,6 +1434,7 @@ mod tests {
         assert_eq!(corporate_actions_exists, 1);
         assert_eq!(news_articles_exists, 1);
         assert_eq!(daily_reviews_exists, 1);
+        assert_eq!(ai_reviews_exists, 1);
     }
 
     #[test]

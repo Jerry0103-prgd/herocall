@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { generateAiReview, loadAiServiceStatus, loadLatestAiReview, type AiReview, type AiServiceStatus } from "../services/ai";
 import { generateDailyReview, loadDailyReview, type DailyReview } from "../services/review";
 
 function chinaToday() {
@@ -20,6 +21,9 @@ export function ReviewPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [aiStatus, setAiStatus] = useState<AiServiceStatus | null>(null);
+  const [aiReview, setAiReview] = useState<AiReview | null>(null);
+  const [isAiGenerating, setIsAiGenerating] = useState(false);
 
   const load = useCallback(async (date: string) => {
     setIsLoading(true);
@@ -37,6 +41,18 @@ export function ReviewPage() {
 
   useEffect(() => { void load(reviewDate); }, [load, reviewDate]);
 
+  useEffect(() => {
+    void loadAiServiceStatus().then(setAiStatus).catch(() => setAiStatus(null));
+  }, []);
+
+  useEffect(() => {
+    if (!review || !aiStatus?.configured) {
+      setAiReview(null);
+      return;
+    }
+    void loadLatestAiReview(review.id).then(setAiReview).catch(() => setAiReview(null));
+  }, [aiStatus?.configured, review]);
+
   async function generate() {
     setIsGenerating(true);
     try {
@@ -49,13 +65,26 @@ export function ReviewPage() {
     }
   }
 
+  async function generateAi() {
+    if (!review) return;
+    setIsAiGenerating(true);
+    try {
+      setAiReview(await generateAiReview(review.reviewDate));
+      setMessage("AI辅助分析已生成");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "AI辅助分析生成失败");
+    } finally {
+      setIsAiGenerating(false);
+    }
+  }
+
   return (
     <section className="page review-page" aria-labelledby="review-title">
       <header className="page-header">
         <div>
           <p className="eyebrow">Structured daily review</p>
           <h1 id="review-title">仓位复盘</h1>
-          <p>仅汇总本地 Portfolio、市场快照和持仓关联资讯；不使用 AI，不提供预测或买卖建议。</p>
+          <p>仅汇总本地 Portfolio、市场快照和持仓关联资讯；AI 仅作结构化解释，不提供预测或买卖建议。</p>
         </div>
         <div className="review-actions"><label>复盘日期<input aria-label="复盘日期" onChange={(event) => setReviewDate(event.target.value)} type="date" value={reviewDate} /></label><button className="primary-button" disabled={isGenerating} onClick={() => void generate()} type="button">{isGenerating ? "正在生成…" : "生成当日复盘"}</button></div>
       </header>
@@ -72,6 +101,15 @@ export function ReviewPage() {
 
         <section className="review-section" aria-labelledby="risk-review-title"><div className="section-heading"><div><p className="section-kicker">Facts only</p><h2 id="risk-review-title">风险提示</h2></div></div><div className="settings-card risk-card"><p>以下仅为已保存数据的事实性状态说明，不构成预测或交易建议。</p><ul>{review.riskSummary.facts.map((fact) => <li key={fact}>{fact}</li>)}</ul></div></section>
       </div> : null}
+
+      <section className="review-section ai-review-section" aria-labelledby="ai-review-title">
+        <div className="section-heading"><div><p className="section-kicker">AI assistance</p><h2 id="ai-review-title">AI复盘</h2></div>{aiStatus?.configured && review ? <button className="secondary-button" disabled={isAiGenerating} onClick={() => void generateAi()} type="button">{isAiGenerating ? "正在生成…" : "生成AI辅助分析"}</button> : null}</div>
+        {!aiStatus ? <div className="settings-card ai-empty-state">AI服务状态暂不可用</div> : null}
+        {aiStatus && !aiStatus.configured ? <div className="settings-card ai-empty-state">AI服务未配置</div> : null}
+        {aiStatus?.configured && !review ? <div className="settings-card ai-empty-state">请先生成当日结构化复盘</div> : null}
+        {aiStatus?.configured && review && !aiReview ? <div className="settings-card ai-empty-state">尚未生成AI辅助分析</div> : null}
+        {aiStatus?.configured && aiReview ? <div className="ai-review-grid"><section className="settings-card ai-section"><h3>FACTS</h3><ul>{aiReview.facts.map((item) => <li key={item}>{item}</li>)}</ul></section><section className="settings-card ai-section"><h3>INFERENCES</h3><ul>{aiReview.inferences.map((item) => <li key={item}>{item}</li>)}</ul></section><section className="settings-card ai-section"><h3>RISKS</h3><ul>{aiReview.risks.map((item) => <li key={item}>{item}</li>)}</ul></section></div> : null}
+      </section>
     </section>
   );
 }

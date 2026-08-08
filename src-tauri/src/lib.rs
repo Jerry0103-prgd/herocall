@@ -1,5 +1,6 @@
 //! Desktop application bootstrap.
 
+mod ai_service;
 mod dashboard_service;
 mod database;
 pub mod market_service;
@@ -10,6 +11,7 @@ mod portfolio_ui_service;
 mod review_service;
 mod settings_service;
 
+use ai_service::{AiReviewView, AiService, AiServiceStatusView};
 use dashboard_service::{AssetSummaryView, DashboardService, MarketIndexQuoteView};
 use news_service::{NewsArticleView, NewsService};
 use portfolio_ui_service::{
@@ -123,6 +125,28 @@ fn generate_daily_review(
     ReviewService::generate(&database, &review_date).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn get_ai_service_status() -> AiServiceStatusView {
+    AiService::status()
+}
+
+#[tauri::command]
+fn get_latest_ai_review(
+    app: tauri::AppHandle,
+    review_id: i64,
+) -> Result<Option<AiReviewView>, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    AiService::latest_for_review(&database, review_id).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn generate_ai_review(app: tauri::AppHandle, review_date: String) -> Result<AiReviewView, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    AiService::generate_from_runtime(&database, &review_date).map_err(|error| error.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -143,7 +167,10 @@ pub fn run() {
             create_database_backup,
             get_holding_news_articles,
             get_daily_review,
-            generate_daily_review
+            generate_daily_review,
+            get_ai_service_status,
+            get_latest_ai_review,
+            generate_ai_review
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AStock AI Workbench");

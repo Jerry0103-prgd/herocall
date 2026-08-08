@@ -40,6 +40,8 @@ Phase 6-A 的财经资讯页面通过 `get_holding_news_articles` Command 读取
 
 Phase 6-B 的仓位复盘页面通过 `get_daily_review` 与 `generate_daily_review` Command 访问 `review_service`。服务只读取 Portfolio Service 的持仓视图、当日已保存市场快照、Dashboard 的已验证指数视图和 News Service 的持仓关联记录；不请求任何 Provider。复盘把账户、市场、持仓贡献和风险事实保存为类型化 JSON。贡献按已计算的今日盈亏降序排列；风险段只能陈述数据缺失、快照状态和已保存资讯数量，禁止预测、收益承诺与买卖建议。
 
+Phase 6-C 的 AI 复盘区通过 `get_ai_service_status`、`get_latest_ai_review` 和 `generate_ai_review` Command 访问 `ai_service`。`ai_service` 组装已保存的每日复盘（含市场快照）、Portfolio 持仓和持仓关联资讯，再交给 `AiProviderAdapter`；UI 不接触模型或 Key。当前 `OpenAiCompatibleAdapter` 只在 `AI_API_KEY`（或 `OPENAI_API_KEY`）、`AI_BASE_URL` 和 `AI_MODEL` 均存在时启用，密钥仅经运行时环境读取，并通过 `curl` 的标准输入传递授权头，不进入参数、日志、SQLite 或前端。模型返回值必须是 JSON 的 `FACTS`、`INFERENCES`、`RISKS` 三段；保存前拒绝买卖推荐、目标价、收益预测/承诺等禁止语言。
+
 ## 4. 数据流与质量控制
 
 1. Scheduler 或用户手动刷新调用 Provider Port。
