@@ -158,7 +158,10 @@ tbody tr:hover { background: #142138; }
 .release-note header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .release-note header strong { color: #79dfb8; font-size: 14px; }
 .release-note time { color: #8193ab; font-size: 11px; }
-.release-note ul { display: grid; gap: 6px; margin: 11px 0 0; padding-left: 18px; color: #b6c4d4; font-size: 12px; line-height: 1.55; }
+.release-note > p { margin: 10px 0 0; color: #d4dfeb; font-size: 12px; }
+.release-note-group { margin-top: 11px; }
+.release-note-group h4 { margin: 0 0 6px; color: #8294ac; font-size: 11px; font-weight: 700; }
+.release-note ul { display: grid; gap: 6px; margin: 0; padding-left: 18px; color: #b6c4d4; font-size: 12px; line-height: 1.55; }
 
 .news-page { background: radial-gradient(circle at 88% 0%, #1a3048 0, transparent 33%), #0d1727; }
 .news-state { border: 1px solid #263650; border-radius: 12px; background: rgb(15 27 45 / 88%); }

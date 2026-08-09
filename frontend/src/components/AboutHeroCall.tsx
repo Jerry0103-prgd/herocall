@@ -1,29 +1,39 @@
 type ReleaseNote = {
   version: string;
   date: string;
-  items: string[];
+  summary?: string;
+  groups: Array<{ title: string; items: string[] }>;
 };
 
 const releaseNotes: ReleaseNote[] = [
   {
     version: "V1.0.0",
     date: "2026-08-09",
-    items: [
-      "完成 Hero Call 品牌升级",
-      "接入 DeepSeek AI 复盘",
-      "支持东方财富公告资讯",
-      "支持事件日历",
-      "增加数据状态概览",
-      "完成手动市场快照模式",
+    summary: "正式版本发布",
+    groups: [
+      { title: "新增", items: [
+        "手动市场快照",
+        "东方财富公告资讯",
+        "AI复盘真实链路",
+        "DeepSeek AI分析",
+        "数据状态监控",
+      ] },
+      { title: "优化", items: [
+        "Hero Call品牌升级",
+        "UI统一优化",
+        "本地数据安全存储",
+      ] },
     ],
   },
   {
     version: "V0.9.0",
     date: "2026-08",
-    items: [
-      "完成 Release 构建",
-      "完成 Keychain 配置",
-      "完成 AI复盘基础能力",
+    groups: [
+      { title: "主要更新", items: [
+        "完成 Release 构建",
+        "完成 Keychain 配置",
+        "完成 AI复盘基础能力",
+      ] },
     ],
   },
 ];
@@ -49,7 +59,11 @@ export function AboutHeroCall({ version }: AboutHeroCallProps) {
           {releaseNotes.map((release) => (
             <article className="release-note" key={release.version}>
               <header><strong>{release.version}</strong><time>{release.date}</time></header>
-              <ul>{release.items.map((item) => <li key={item}>{item}</li>)}</ul>
+              {release.summary ? <p>{release.summary}</p> : null}
+              {release.groups.map((group) => <div className="release-note-group" key={group.title}>
+                <h4>{group.title}</h4>
+                <ul>{group.items.map((item) => <li key={item}>{item}</li>)}</ul>
+              </div>)}
             </article>
           ))}
         </div>
