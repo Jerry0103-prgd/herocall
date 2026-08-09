@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 
+import { AboutHeroCall } from "../components/AboutHeroCall";
 import { CashAccountForm } from "../components/CashAccountForm";
 import { loadDeepSeekStatus, removeDeepSeekApiKey, saveDeepSeekApiKey } from "../services/ai";
 import {
@@ -32,6 +34,7 @@ export function SettingsPage() {
   const [deepSeekKey, setDeepSeekKey] = useState("");
   const [isSavingDeepSeek, setIsSavingDeepSeek] = useState(false);
   const [isRemovingDeepSeek, setIsRemovingDeepSeek] = useState(false);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -50,6 +53,15 @@ export function SettingsPage() {
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  useEffect(() => {
+    let isMounted = true;
+    void getVersion().then(
+      (version) => { if (isMounted) setAppVersion(version); },
+      () => { if (isMounted) setAppVersion(null); },
+    );
+    return () => { isMounted = false; };
+  }, []);
 
   async function saveCashAccount(input: { currency: "CNY"; amount: string }) {
     setIsSaving(true);
@@ -196,6 +208,8 @@ export function SettingsPage() {
         <div className="section-heading"><div><p className="section-kicker">Backup</p><h2 id="backup-title">本地备份</h2></div></div>
         <div className="settings-card backup-card"><div><strong>SQLite 数据库备份</strong><p>备份文件保存在本机 Documents 下的应用备份目录，不覆盖已有备份。</p></div><button className="secondary-button" disabled={isBackingUp} onClick={() => void backup()} type="button">{isBackingUp ? "正在备份…" : "立即备份"}</button></div>
       </section>
+
+      <AboutHeroCall version={appVersion} />
     </section>
   );
 }
