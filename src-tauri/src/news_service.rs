@@ -239,11 +239,11 @@ impl NewsService {
         }
 
         let no_data_reason = if database.list_market_securities_for_holdings()?.is_empty() {
-            "NO_DATA：当前没有持仓证券，未请求东方财富公告。".into()
+            "NO_DATA：当前没有关注标的，未请求东方财富公告。".into()
         } else if database.latest_manual_refresh_run()?.is_none() {
             "NO_DATA：尚未更新今日市场快照，未请求东方财富公告。".into()
         } else {
-            "NO_DATA：最近一次市场快照未保存与当前持仓关联的东方财富公告；请重新更新今日市场快照，并查看更新结果中的数据源提示。".into()
+            "NO_DATA：最近一次市场快照未保存与当前关注标的关联的东方财富公告；请重新更新今日市场快照，并查看更新结果中的数据源提示。".into()
         };
         Ok(HoldingNewsView {
             articles,
@@ -470,7 +470,7 @@ mod tests {
         assert!(no_holding.articles.is_empty());
         assert_eq!(
             no_holding.no_data_reason.as_deref(),
-            Some("NO_DATA：当前没有持仓证券，未请求东方财富公告。")
+            Some("NO_DATA：当前没有关注标的，未请求东方财富公告。")
         );
 
         related_security(&database);
@@ -495,7 +495,7 @@ mod tests {
             .expect("read holding news after an empty refresh");
         assert_eq!(
             no_matching_announcement.no_data_reason.as_deref(),
-            Some("NO_DATA：最近一次市场快照未保存与当前持仓关联的东方财富公告；请重新更新今日市场快照，并查看更新结果中的数据源提示。")
+            Some("NO_DATA：最近一次市场快照未保存与当前关注标的关联的东方财富公告；请重新更新今日市场快照，并查看更新结果中的数据源提示。")
         );
     }
 }

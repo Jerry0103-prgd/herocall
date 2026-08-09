@@ -969,15 +969,15 @@ impl DatabaseService {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    /// Returns only securities currently held by the user, which defines the safe refresh scope.
-    /// The refresh service never invents a watchlist or asks a provider for arbitrary symbols.
+    /// Returns securities recorded by the user, including zero-position research watchlist items.
+    /// The refresh service never invents symbols or asks a provider for arbitrary codes.
     pub fn list_market_securities_for_holdings(&self) -> DatabaseResult<Vec<MarketSecurity>> {
         let mut statement = self.connection.prepare(
             "
             SELECT DISTINCT s.id, s.symbol, s.name, s.market
             FROM holdings h
             JOIN securities s ON s.id = h.security_id
-            WHERE h.quantity > 0
+            WHERE h.quantity >= 0
             ORDER BY s.market, s.symbol
             ",
         )?;

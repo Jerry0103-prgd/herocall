@@ -28,6 +28,14 @@ pub struct CreateHoldingInput {
     pub average_cost: String,
 }
 
+/// A research watchlist record intentionally has no quantity, cost, or transaction data.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateWatchlistInput {
+    pub symbol: String,
+    pub name: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateHoldingInput {
@@ -54,6 +62,7 @@ pub struct PortfolioHoldingView {
     pub total_pnl: Option<String>,
     pub change_percent: Option<String>,
     pub transaction_status: String,
+    pub is_watchlist: bool,
 }
 
 #[derive(Debug)]
@@ -62,6 +71,7 @@ pub enum PortfolioUiError {
     Validation(&'static str),
     ExistingHolding,
     MissingHolding,
+    NotWatchlist,
 }
 
 impl fmt::Display for PortfolioUiError {
@@ -69,8 +79,9 @@ impl fmt::Display for PortfolioUiError {
         match self {
             Self::Database(error) => write!(formatter, "database error: {error}"),
             Self::Validation(message) => formatter.write_str(message),
-            Self::ExistingHolding => formatter.write_str("该证券已有持仓，请使用修改"),
+            Self::ExistingHolding => formatter.write_str("该证券已在我的关注中"),
             Self::MissingHolding => formatter.write_str("未找到该持仓"),
+            Self::NotWatchlist => formatter.write_str("历史持仓记录不能通过我的关注删除"),
         }
     }
 }
@@ -152,6 +163,56 @@ impl PortfolioUiService {
             .ok_or(PortfolioUiError::MissingHolding)
     }
 
+    /// Creates a zero-position record that represents a followed security rather than an account
+    /// position. No price, quantity, cost, transaction, or valuation is invented here.
+    pub fn create_watchlist(
+        database: &DatabaseService,
+        input: CreateWatchlistInput,
+    ) -> Result<PortfolioHoldingView, PortfolioUiError> {
+        let parsed = ParsedWatchlistInput::parse(input)?;
+        let account = database.get_or_create_local_holding_account()?;
+        let security =
+            match database.find_security_by_symbol_and_market(&parsed.symbol, &parsed.market)? {
+                Some(security) => database.update_security_for_portfolio(
+                    security.id,
+                    &parsed.name,
+                    &parsed.security_type,
+                    &parsed.trade_rule,
+                )?,
+                None => database.create_security(NewSecurity {
+                    symbol: parsed.symbol.clone(),
+                    name: parsed.name.clone(),
+                    market: parsed.market.clone(),
+                    exchange: parsed.market.clone(),
+                    security_type: parsed.security_type.clone(),
+                    industry: None,
+                    concepts_json: "[]".into(),
+                    trade_rule: parsed.trade_rule.clone(),
+                })?,
+            };
+        if database
+            .find_holding_by_account_and_security(account.id, security.id)?
+            .is_some()
+        {
+            return Err(PortfolioUiError::ExistingHolding);
+        }
+
+        let holding = database.create_holding(NewHolding {
+            cash_account_id: account.id,
+            security_id: security.id,
+            quantity: 0,
+            available_quantity: 0,
+            average_cost: "0".into(),
+            cost_amount: "0".into(),
+            position_source: "MANUAL".into(),
+            as_of_date: None,
+        })?;
+        Self::list(database)?
+            .into_iter()
+            .find(|view| view.holding_id == holding.id)
+            .ok_or(PortfolioUiError::MissingHolding)
+    }
+
     pub fn update(
         database: &DatabaseService,
         input: UpdateHoldingInput,
@@ -210,7 +271,44 @@ impl PortfolioUiService {
         Ok(())
     }
 
+    pub fn delete_watchlist(
+        database: &DatabaseService,
+        holding_id: i64,
+    ) -> Result<(), PortfolioUiError> {
+        let holding = database
+            .get_holding(holding_id)
+            .map_err(|error| match error {
+                DatabaseError::Sqlite(rusqlite::Error::QueryReturnedNoRows) => {
+                    PortfolioUiError::MissingHolding
+                }
+                other => PortfolioUiError::Database(other),
+            })?;
+        if holding.quantity != 0 {
+            return Err(PortfolioUiError::NotWatchlist);
+        }
+        Self::delete(database, holding_id)
+    }
+
     fn to_view(data: PortfolioHoldingData) -> Result<PortfolioHoldingView, PortfolioUiError> {
+        if data.quantity == 0 {
+            return Ok(PortfolioHoldingView {
+                holding_id: data.holding_id,
+                name: data.name,
+                symbol: data.symbol,
+                market: data.market,
+                security_type: data.security_type,
+                quantity: "0".into(),
+                available_quantity: Some("0".into()),
+                average_cost: "0".into(),
+                current_price: data.current_price,
+                market_value: None,
+                daily_pnl: None,
+                total_pnl: None,
+                change_percent: data.change_percent,
+                transaction_status: "关注标的".into(),
+                is_watchlist: true,
+            });
+        }
         let security_type = parse_security_type(&data.security_type)?;
         let trade_rule = parse_trade_rule(&data.trade_rule)?;
         let service = PortfolioService::new(security_type, trade_rule);
@@ -266,6 +364,7 @@ impl PortfolioUiService {
             transaction_status: data
                 .transaction_status
                 .unwrap_or_else(|| "暂无交易记录".into()),
+            is_watchlist: false,
         })
     }
 }
@@ -280,6 +379,52 @@ struct ParsedCreateInput {
     trade_rule_value: TradeRule,
     quantity: i64,
     average_cost: Decimal,
+}
+
+struct ParsedWatchlistInput {
+    symbol: String,
+    name: String,
+    market: String,
+    security_type: String,
+    trade_rule: String,
+}
+
+impl ParsedWatchlistInput {
+    fn parse(input: CreateWatchlistInput) -> Result<Self, PortfolioUiError> {
+        let symbol = input.symbol.trim().to_owned();
+        if symbol.len() != 6 || !symbol.bytes().all(|value| value.is_ascii_digit()) {
+            return Err(PortfolioUiError::Validation("证券代码必须是 6 位数字"));
+        }
+        let (market, security_type) = infer_a_share_security(&symbol)?;
+        let trade_rule = if security_type == "ETF" {
+            "UNKNOWN"
+        } else {
+            "T_PLUS_1"
+        };
+        Ok(Self {
+            symbol,
+            name: normalized_name(&input.name)?,
+            market: market.into(),
+            security_type: security_type.into(),
+            trade_rule: trade_rule.into(),
+        })
+    }
+}
+
+fn infer_a_share_security(symbol: &str) -> Result<(&'static str, &'static str), PortfolioUiError> {
+    let market = if matches!(&symbol[..2], "60" | "68" | "51" | "52" | "56" | "58") {
+        "SSE"
+    } else if matches!(&symbol[..2], "00" | "30" | "15" | "16") {
+        "SZSE"
+    } else {
+        return Err(PortfolioUiError::Validation("暂不支持该证券代码所属市场"));
+    };
+    let security_type = if matches!(&symbol[..2], "51" | "52" | "56" | "58" | "15" | "16") {
+        "ETF"
+    } else {
+        "STOCK"
+    };
+    Ok((market, security_type))
 }
 
 impl ParsedCreateInput {
@@ -416,5 +561,57 @@ mod tests {
         assert!(PortfolioUiService::list(&database)
             .expect("list holdings")
             .is_empty());
+    }
+
+    #[test]
+    fn watchlist_uses_a_zero_position_without_generating_financial_data() {
+        let database = DatabaseService::open_in_memory().expect("initialize database");
+        let created = PortfolioUiService::create_watchlist(
+            &database,
+            CreateWatchlistInput {
+                symbol: "300209".into(),
+                name: "测试关注证券".into(),
+            },
+        )
+        .expect("create watchlist item");
+
+        assert!(created.is_watchlist);
+        assert_eq!(created.quantity, "0");
+        assert_eq!(created.average_cost, "0");
+        assert_eq!(created.current_price, None);
+        assert_eq!(created.market_value, None);
+        assert_eq!(created.daily_pnl, None);
+        assert_eq!(created.total_pnl, None);
+        assert_eq!(
+            database
+                .list_market_securities_for_holdings()
+                .expect("watchlist refresh scope")
+                .len(),
+            1
+        );
+
+        PortfolioUiService::delete_watchlist(&database, created.holding_id)
+            .expect("delete watchlist item");
+        assert!(PortfolioUiService::list(&database)
+            .expect("list watchlist")
+            .is_empty());
+    }
+
+    #[test]
+    fn watchlist_delete_preserves_an_existing_position() {
+        let database = DatabaseService::open_in_memory().expect("initialize database");
+        let existing =
+            PortfolioUiService::create(&database, create_input()).expect("create holding");
+
+        assert!(matches!(
+            PortfolioUiService::delete_watchlist(&database, existing.holding_id),
+            Err(PortfolioUiError::NotWatchlist)
+        ));
+        assert_eq!(
+            PortfolioUiService::list(&database)
+                .expect("list holdings")
+                .len(),
+            1
+        );
     }
 }

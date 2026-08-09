@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { PortfolioHoldingForm } from "../components/PortfolioHoldingForm";
+import { WatchlistForm } from "../components/WatchlistForm";
 import {
-  createPortfolioHolding,
-  deletePortfolioHolding,
+  createWatchlistItem,
+  deleteWatchlistItem,
   loadPortfolioHoldings,
-  type CreateHoldingInput,
+  type CreateWatchlistInput,
   type PortfolioHolding,
 } from "../services/portfolio";
 
@@ -30,11 +30,10 @@ export function PortfolioPage() {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  async function save(input: CreateHoldingInput | { name: string; quantity: string; averageCost: string }) {
-    if (!("symbol" in input)) return;
+  async function save(input: CreateWatchlistInput) {
     setIsSaving(true);
     try {
-      await createPortfolioHolding(input);
+      await createWatchlistItem(input);
       setIsFormOpen(false);
       await refresh();
     } catch (error) {
@@ -47,7 +46,7 @@ export function PortfolioPage() {
   async function remove(holding: PortfolioHolding) {
     if (!window.confirm(`确认移除“${holding.name}”吗？`)) return;
     try {
-      await deletePortfolioHolding(holding.holdingId);
+      await deleteWatchlistItem(holding.holdingId);
       await refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "关注标的删除失败");
@@ -66,7 +65,7 @@ export function PortfolioPage() {
       </header>
 
       {message ? <p className="notice" role="status">{message}</p> : null}
-      {isFormOpen ? <PortfolioHoldingForm holding={null} isSaving={isSaving} onCancel={() => setIsFormOpen(false)} onSubmit={save} /> : null}
+      {isFormOpen ? <WatchlistForm isSaving={isSaving} onCancel={() => setIsFormOpen(false)} onSubmit={save} /> : null}
 
       <section className="portfolio-table-card" aria-label="关注标的列表">
         {isLoading ? <p className="table-state">正在读取本地关注标的…</p> : null}
@@ -77,7 +76,7 @@ export function PortfolioPage() {
               <article className="watchlist-item" key={holding.holdingId}>
                 <span className="code-cell">{holding.symbol}</span>
                 <strong>{holding.name}</strong>
-                <button className="watchlist-remove-button" onClick={() => void remove(holding)} type="button">删除关注</button>
+                {holding.isWatchlist ? <button className="watchlist-remove-button" onClick={() => void remove(holding)} type="button">删除关注</button> : null}
               </article>
             ))}
           </div>

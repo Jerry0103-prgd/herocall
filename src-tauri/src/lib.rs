@@ -27,7 +27,8 @@ use initialization_service::{InitializationService, InitializationStatusView};
 use market_refresh_service::{ManualMarketSnapshotView, MarketRefreshService, MarketRefreshView};
 use news_service::{HoldingNewsView, NewsService};
 use portfolio_ui_service::{
-    CreateHoldingInput, PortfolioHoldingView, PortfolioUiService, UpdateHoldingInput,
+    CreateHoldingInput, CreateWatchlistInput, PortfolioHoldingView, PortfolioUiService,
+    UpdateHoldingInput,
 };
 use review_service::{DailyReviewView, ReviewService};
 use secure_storage::{
@@ -98,6 +99,16 @@ fn create_portfolio_holding(
 }
 
 #[tauri::command]
+fn create_watchlist_item(
+    app: tauri::AppHandle,
+    input: CreateWatchlistInput,
+) -> Result<PortfolioHoldingView, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    PortfolioUiService::create_watchlist(&database, input).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn update_portfolio_holding(
     app: tauri::AppHandle,
     input: UpdateHoldingInput,
@@ -112,6 +123,13 @@ fn delete_portfolio_holding(app: tauri::AppHandle, holding_id: i64) -> Result<()
     let database = database::service::DatabaseService::open_app_database(&app)
         .map_err(|error| error.to_string())?;
     PortfolioUiService::delete(&database, holding_id).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_watchlist_item(app: tauri::AppHandle, holding_id: i64) -> Result<(), String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    PortfolioUiService::delete_watchlist(&database, holding_id).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -267,8 +285,10 @@ pub fn run() {
             refresh_tushare_market_data,
             get_portfolio_holdings,
             create_portfolio_holding,
+            create_watchlist_item,
             update_portfolio_holding,
             delete_portfolio_holding,
+            delete_watchlist_item,
             get_settings_status,
             save_tushare_token,
             remove_tushare_token,

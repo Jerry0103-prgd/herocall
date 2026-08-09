@@ -201,9 +201,9 @@ impl MarketRefreshService {
                 message: news_fetch_issue.or(news_save_issue).or_else(|| {
                     news.is_empty().then(|| {
                         if disclosure_securities.is_empty() {
-                            "NO_DATA：当前没有持仓证券，未请求东方财富公告。".into()
+                            "NO_DATA：当前没有关注标的，未请求东方财富公告。".into()
                         } else {
-                            "NO_DATA：东方财富未返回与当前持仓关联的公开公告。".into()
+                            "NO_DATA：东方财富未返回与当前关注标的关联的公开公告。".into()
                         }
                     })
                 }),
@@ -220,7 +220,7 @@ impl MarketRefreshService {
                 message: event_issue.or_else(|| {
                     events
                         .is_empty()
-                        .then(|| "未返回与当前持仓关联的公开事件。".into())
+                        .then(|| "未返回与当前关注标的关联的公开事件。".into())
                 }),
             },
         })

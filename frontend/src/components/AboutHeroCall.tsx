@@ -7,6 +7,19 @@ type ReleaseNote = {
 
 const releaseNotes: ReleaseNote[] = [
   {
+    version: "V1.0.2",
+    date: "2026-08-09",
+    summary: "体验优化版本",
+    groups: [
+      { title: "优化", items: [
+        "优化关注标的管理体验",
+        "优化资讯展示",
+        "优化AI复盘阅读体验",
+        "优化首页操作入口",
+      ] },
+    ],
+  },
+  {
     version: "V1.0.1",
     date: "2026-08-09",
     summary: "体验优化与问题修复",

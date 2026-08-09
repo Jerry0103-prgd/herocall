@@ -17,6 +17,7 @@ export type PortfolioHolding = {
   totalPnl: string | null;
   changePercent: string | null;
   transactionStatus: string;
+  isWatchlist: boolean;
 };
 
 export type CreateHoldingInput = {
@@ -26,6 +27,11 @@ export type CreateHoldingInput = {
   securityType: SecurityType;
   quantity: string;
   averageCost: string;
+};
+
+export type CreateWatchlistInput = {
+  symbol: string;
+  name: string;
 };
 
 export type UpdateHoldingInput = {
@@ -43,10 +49,18 @@ export function createPortfolioHolding(input: CreateHoldingInput): Promise<Portf
   return invoke<PortfolioHolding>("create_portfolio_holding", { input });
 }
 
+export function createWatchlistItem(input: CreateWatchlistInput): Promise<PortfolioHolding> {
+  return invoke<PortfolioHolding>("create_watchlist_item", { input });
+}
+
 export function updatePortfolioHolding(input: UpdateHoldingInput): Promise<PortfolioHolding> {
   return invoke<PortfolioHolding>("update_portfolio_holding", { input });
 }
 
 export function deletePortfolioHolding(holdingId: number): Promise<void> {
   return invoke<void>("delete_portfolio_holding", { holdingId });
+}
+
+export function deleteWatchlistItem(holdingId: number): Promise<void> {
+  return invoke<void>("delete_watchlist_item", { holdingId });
 }
