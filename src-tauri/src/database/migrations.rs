@@ -79,6 +79,16 @@ const MIGRATIONS: &[Migration] = &[
         checksum: "ai-research-report-014-v1",
         sql: include_str!("../../migrations/014_ai_research_report.sql"),
     },
+    Migration {
+        version: "015",
+        checksum: "ai-provider-settings-015-v1",
+        sql: include_str!("../../migrations/015_ai_provider_settings.sql"),
+    },
+    Migration {
+        version: "016",
+        checksum: "ai-review-security-016-v1",
+        sql: include_str!("../../migrations/016_ai_review_security.sql"),
+    },
 ];
 
 pub(super) fn apply(connection: &mut Connection) -> DatabaseResult<()> {

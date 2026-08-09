@@ -146,6 +146,13 @@ tbody tr:hover { background: #142138; }
 .settings-card p { margin: 7px 0 0; color: #8494aa; font-size: 12px; line-height: 1.6; }
 .settings-status { flex: 0 0 auto; padding: 6px 10px; border: 1px solid #56647a; border-radius: 999px; color: #bac7d6; font-size: 12px; }
 .settings-status.is-configured { border-color: #4cae91; color: #80e0bc; }
+.ai-provider-list { display: grid; gap: 12px; }
+.ai-provider-card { overflow: hidden; }
+.ai-provider-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 20px; }
+.ai-provider-header p { margin: 6px 0 0; color: #8494aa; font-size: 12px; }
+.ai-provider-statuses { display: flex; align-items: center; gap: 9px; }
+.ai-provider-key-form { margin: 0; border-top: 1px solid #263650; border-radius: 0; box-shadow: none; }
+.system-sync-card strong { color: #bfcddd; font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cash-account-form { margin: 0 0 14px; padding: 24px; }
 .cash-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .cash-accounts-card { overflow: hidden; }
@@ -224,6 +231,7 @@ tbody tr:hover { background: #142138; }
 .ai-generation-status { margin: 0 0 12px; color: #8fa1b8; font-size: 12px; }
 .ai-error-state { border: 1px solid #8a4a53; color: #ffc1c8; }
 .ai-report-wrap { overflow: hidden; border: 1px solid #2d405a; border-radius: 14px; background: rgb(15 27 45 / 88%); box-shadow: 0 12px 35px rgb(0 0 0 / 12%); }
+.ai-review-list { display: grid; gap: 20px; }
 .ai-report-heading { display: flex; align-items: end; justify-content: space-between; gap: 18px; padding: 21px 22px 17px; border-bottom: 1px solid #273950; }
 .ai-report-heading h3 { margin: 0; color: #edf3fa; font-size: 18px; }
 .ai-report-heading > span { max-width: 360px; color: #8293aa; font-size: 12px; line-height: 1.5; text-align: right; }

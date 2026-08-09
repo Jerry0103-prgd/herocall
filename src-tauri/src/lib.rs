@@ -18,7 +18,7 @@ mod review_service;
 mod secure_storage;
 mod settings_service;
 
-use ai_service::{AiReviewView, AiService, AiServiceStatusView};
+use ai_service::{AiProviderConfigView, AiReviewView, AiService, AiServiceStatusView};
 use dashboard_service::{
     AssetSummaryView, DashboardDataStatusView, DashboardService, MarketIndexQuoteView,
 };
@@ -32,10 +32,14 @@ use portfolio_ui_service::{
 };
 use review_service::{DailyReviewView, ReviewService};
 use secure_storage::{
+    get_ai_provider_key_status as load_ai_provider_key_status,
     get_deepseek_status as load_deepseek_status, get_tushare_status as load_tushare_status,
+    remove_ai_provider_api_key as delete_ai_provider_api_key,
     remove_deepseek_api_key as delete_deepseek_api_key,
-    remove_tushare_token as delete_tushare_token, save_deepseek_api_key as store_deepseek_api_key,
-    save_tushare_token as store_tushare_token, DeepSeekStatusView, TushareStatusView,
+    remove_tushare_token as delete_tushare_token,
+    save_ai_provider_api_key as store_ai_provider_api_key,
+    save_deepseek_api_key as store_deepseek_api_key, save_tushare_token as store_tushare_token,
+    DeepSeekStatusView, TushareStatusView,
 };
 use settings_service::{
     BackupView, CashAccountView, CreateCashAccountInput, SettingsService, SettingsStatusView,
@@ -226,6 +230,40 @@ fn get_ai_service_status() -> AiServiceStatusView {
 }
 
 #[tauri::command]
+fn get_ai_provider_configs(app: tauri::AppHandle) -> Result<Vec<AiProviderConfigView>, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    AiService::provider_configs(&database).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_ai_provider_api_key(provider: String, key: String) -> Result<DeepSeekStatusView, String> {
+    store_ai_provider_api_key(&provider, &key).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_ai_provider_api_key(provider: String) -> Result<DeepSeekStatusView, String> {
+    delete_ai_provider_api_key(&provider).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_ai_provider_key_status(provider: String) -> Result<DeepSeekStatusView, String> {
+    load_ai_provider_key_status(&provider).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_ai_provider_enabled(
+    app: tauri::AppHandle,
+    provider: String,
+    enabled: bool,
+) -> Result<Vec<AiProviderConfigView>, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    AiService::set_provider_enabled(&database, &provider, enabled)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn get_latest_ai_review(
     app: tauri::AppHandle,
     review_id: i64,
@@ -243,6 +281,27 @@ fn generate_ai_review_for_snapshot(
     let database = database::service::DatabaseService::open_app_database(&app)
         .map_err(|error| error.to_string())?;
     AiService::generate_from_runtime(&database, &review_date).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn generate_ai_reviews_for_snapshot(
+    app: tauri::AppHandle,
+    review_date: String,
+) -> Result<Vec<AiReviewView>, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    AiService::generate_all_from_runtime(&database, &review_date).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_ai_reviews_for_date(
+    app: tauri::AppHandle,
+    review_date: String,
+) -> Result<Vec<AiReviewView>, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    let review = ReviewService::get(&database, &review_date).map_err(|error| error.to_string())?;
+    AiService::list_for_review(&database, review.id).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -303,8 +362,15 @@ pub fn run() {
             get_daily_review,
             generate_daily_review,
             get_ai_service_status,
+            get_ai_provider_configs,
+            save_ai_provider_api_key,
+            remove_ai_provider_api_key,
+            get_ai_provider_key_status,
+            set_ai_provider_enabled,
             get_latest_ai_review,
             generate_ai_review_for_snapshot,
+            generate_ai_reviews_for_snapshot,
+            get_ai_reviews_for_date,
             get_calendar_events,
             get_initialization_status,
             complete_initialization

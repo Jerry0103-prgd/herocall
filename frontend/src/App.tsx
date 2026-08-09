@@ -13,7 +13,7 @@ import { loadInitializationStatus } from "./services/initialization";
 
 const pageTitles: Record<Exclude<PageId, "dashboard">, string> = {
   news: "财经资讯",
-  review: "仓位复盘",
+  review: "AI复盘",
   holdings: "我的关注",
   calendar: "事件日历",
   settings: "设置",

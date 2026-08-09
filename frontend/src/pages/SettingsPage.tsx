@@ -2,7 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 
 import { AboutHeroCall } from "../components/AboutHeroCall";
-import { loadDeepSeekStatus, removeDeepSeekApiKey, saveDeepSeekApiKey } from "../services/ai";
+import {
+  loadAiProviderConfigs,
+  removeAiProviderApiKey,
+  saveAiProviderApiKey,
+  setAiProviderEnabled,
+  type AiProviderConfig,
+} from "../services/ai";
 import {
   createDatabaseBackup,
   loadSettingsStatus,
@@ -12,8 +18,13 @@ import {
   type SettingsStatus,
 } from "../services/settings";
 
-function valueOrUnavailable(value: string | null | undefined) {
-  return value ?? "暂无数据";
+function formatBeijingTime(value: string | null | undefined) {
+  if (!value) return "暂无数据";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "未确认";
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}`;
 }
 
 export function SettingsPage() {
@@ -22,18 +33,17 @@ export function SettingsPage() {
   const [isSavingToken, setIsSavingToken] = useState(false);
   const [isRemovingToken, setIsRemovingToken] = useState(false);
   const [tushareToken, setTushareToken] = useState("");
-  const [deepSeekStatus, setDeepSeekStatus] = useState<"已配置" | "未配置" | "未确认">("未确认");
-  const [deepSeekKey, setDeepSeekKey] = useState("");
-  const [isSavingDeepSeek, setIsSavingDeepSeek] = useState(false);
-  const [isRemovingDeepSeek, setIsRemovingDeepSeek] = useState(false);
+  const [aiProviders, setAiProviders] = useState<AiProviderConfig[]>([]);
+  const [providerKeys, setProviderKeys] = useState<Record<string, string>>({});
+  const [activeProvider, setActiveProvider] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [nextStatus, tokenStatus, nextDeepSeekStatus] = await Promise.all([loadSettingsStatus(), loadTushareStatus(), loadDeepSeekStatus()]);
+      const [nextStatus, tokenStatus, providers] = await Promise.all([loadSettingsStatus(), loadTushareStatus(), loadAiProviderConfigs()]);
       setStatus({ ...nextStatus, tushareStatus: tokenStatus.status });
-      setDeepSeekStatus(nextDeepSeekStatus.status);
+      setAiProviders(providers);
       setMessage(null);
     } catch {
       setMessage("本地设置服务暂不可用");
@@ -95,25 +105,36 @@ export function SettingsPage() {
     }
   }
 
-  async function saveDeepSeek() {
-    if (!deepSeekKey.trim()) { setMessage("请输入 DeepSeek API Key"); return; }
-    setIsSavingDeepSeek(true);
+  async function saveProvider(provider: AiProviderConfig) {
+    const key = providerKeys[provider.provider]?.trim();
+    if (!key) { setMessage(`请输入 ${provider.displayName} API Key`); return; }
+    setActiveProvider(provider.provider);
     try {
-      const result = await saveDeepSeekApiKey(deepSeekKey);
-      setDeepSeekKey(""); setDeepSeekStatus(result.status);
-      setMessage("DeepSeek API Key 已安全保存到系统钥匙串");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "DeepSeek API Key 保存失败"); }
-    finally { setIsSavingDeepSeek(false); }
+      await saveAiProviderApiKey(provider.provider, key);
+      setProviderKeys((current) => ({ ...current, [provider.provider]: "" }));
+      setAiProviders(await loadAiProviderConfigs());
+      setMessage(`${provider.displayName} API Key 已安全保存到系统钥匙串`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : `${provider.displayName} API Key 保存失败`); }
+    finally { setActiveProvider(null); }
   }
 
-  async function removeDeepSeek() {
-    setIsRemovingDeepSeek(true);
+  async function removeProvider(provider: AiProviderConfig) {
+    setActiveProvider(provider.provider);
     try {
-      const result = await removeDeepSeekApiKey();
-      setDeepSeekKey(""); setDeepSeekStatus(result.status);
-      setMessage("DeepSeek API Key 已从系统钥匙串删除");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "DeepSeek API Key 删除失败"); }
-    finally { setIsRemovingDeepSeek(false); }
+      await removeAiProviderApiKey(provider.provider);
+      setAiProviders(await setAiProviderEnabled(provider.provider, false));
+      setMessage(`${provider.displayName} API Key 已从系统钥匙串删除并关闭`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : `${provider.displayName} API Key 删除失败`); }
+    finally { setActiveProvider(null); }
+  }
+
+  async function toggleProvider(provider: AiProviderConfig) {
+    setActiveProvider(provider.provider);
+    try {
+      setAiProviders(await setAiProviderEnabled(provider.provider, !provider.enabled));
+      setMessage(`${provider.displayName} 已${provider.enabled ? "关闭" : "开启"}`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "AI Provider 状态更新失败"); }
+    finally { setActiveProvider(null); }
   }
 
   return (
@@ -145,19 +166,11 @@ export function SettingsPage() {
       </section>
 
       <section className="settings-section" aria-labelledby="ai-config-title">
-        <div className="section-heading"><div><p className="section-kicker">AI provider</p><h2 id="ai-config-title">DeepSeek 配置</h2></div></div>
-        <div className="settings-card settings-config-card">
-          <div><strong>DeepSeek</strong><p>API Key 仅保存到 macOS 系统钥匙串；界面只显示配置状态，不读取或回显密钥。</p></div>
-          <span className={`settings-status ${deepSeekStatus === "已配置" ? "is-configured" : ""}`}>{deepSeekStatus}</span>
-        </div>
-        <form className="settings-card tushare-token-form" onSubmit={(event) => { event.preventDefault(); void saveDeepSeek(); }}>
-          <label htmlFor="deepseek-api-key">DeepSeek API Key</label>
-          <div className="tushare-token-actions">
-            <input autoComplete="off" disabled={isSavingDeepSeek || isRemovingDeepSeek} id="deepseek-api-key" onChange={(event) => setDeepSeekKey(event.target.value)} placeholder="输入后仅保存到系统钥匙串" type="password" value={deepSeekKey} />
-            <button className="primary-button" disabled={isSavingDeepSeek || isRemovingDeepSeek} type="submit">{isSavingDeepSeek ? "正在保存…" : "保存 Key"}</button>
-            <button className="secondary-button" disabled={isSavingDeepSeek || isRemovingDeepSeek || deepSeekStatus !== "已配置"} onClick={() => void removeDeepSeek()} type="button">{isRemovingDeepSeek ? "正在删除…" : "删除 Key"}</button>
-          </div>
-        </form>
+        <div className="section-heading"><div><p className="section-kicker">AI provider</p><h2 id="ai-config-title">AI Provider 配置</h2></div><span>仅调用一个已开启 Provider，按优先级选择。</span></div>
+        <div className="ai-provider-list">{aiProviders.map((provider) => <article className="settings-card ai-provider-card" key={provider.provider}>
+          <div className="ai-provider-header"><div><strong>{provider.displayName}</strong><p>模型：{provider.model}</p></div><div className="ai-provider-statuses"><span className={`settings-status ${provider.configured ? "is-configured" : ""}`}>{provider.configured ? "已配置" : "未配置"}</span><button className="secondary-button" disabled={activeProvider === provider.provider || (!provider.enabled && !provider.configured)} onClick={() => void toggleProvider(provider)} type="button">{provider.enabled ? "关闭" : "开启"}</button></div></div>
+          <form className="tushare-token-form ai-provider-key-form" onSubmit={(event) => { event.preventDefault(); void saveProvider(provider); }}><label htmlFor={`${provider.provider}-api-key`}>{provider.displayName} API Key</label><div className="tushare-token-actions"><input autoComplete="off" disabled={activeProvider === provider.provider} id={`${provider.provider}-api-key`} onChange={(event) => setProviderKeys((current) => ({ ...current, [provider.provider]: event.target.value }))} placeholder="输入后仅保存到系统钥匙串" type="password" value={providerKeys[provider.provider] ?? ""} /><button className="primary-button" disabled={activeProvider === provider.provider} type="submit">{activeProvider === provider.provider ? "处理中…" : "保存 Key"}</button><button className="secondary-button" disabled={activeProvider === provider.provider || !provider.configured} onClick={() => void removeProvider(provider)} type="button">删除 Key</button></div></form>
+        </article>)}</div>
       </section>
 
       <section className="settings-section" aria-labelledby="system-status-title">
@@ -165,7 +178,7 @@ export function SettingsPage() {
         <div className="system-status-grid">
           <div className="settings-card"><span>数据库状态</span><strong>{status?.databaseStatus ?? "未确认"}</strong></div>
           <div className="settings-card"><span>行情连接状态</span><strong>{status?.marketConnectionStatus ?? "未确认"}</strong></div>
-          <div className="settings-card"><span>最后同步时间</span><strong>{valueOrUnavailable(status?.lastSyncAt)}</strong></div>
+          <div className="settings-card system-sync-card"><span>最后同步时间</span><strong>{formatBeijingTime(status?.lastSyncAt)}</strong></div>
         </div>
       </section>
 

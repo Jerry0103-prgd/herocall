@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { generateAiReview, loadAiServiceStatus, loadLatestAiReview, type AiReview, type AiServiceStatus } from "../services/ai";
-import { generateDailyReview, loadDailyReview, type DailyReview } from "../services/review";
+import {
+  generateAiReviews,
+  loadAiProviderConfigs,
+  loadAiReviewsForDate,
+  type AiReview,
+  type AiProviderConfig,
+} from "../services/ai";
 
 const reportLabels = [
   ["当前个股情况", "stockStatus"],
-  ["当日市场整体情绪和板块情况", "marketAnalysis"],
-  ["个股所属板块分析", "sectorAnalysis"],
-  ["个股消息面分析", "newsAnalysis"],
-  ["个股技术面分析", "technicalAnalysis"],
+  ["当前市场环境影响", "marketAnalysis"],
+  ["所属板块分析", "sectorAnalysis"],
+  ["消息面分析", "newsAnalysis"],
+  ["技术面分析", "technicalAnalysis"],
   ["策略参考", "strategyReference"],
   ["综合结论", "conclusion"],
 ] as const;
@@ -23,52 +28,49 @@ function chinaToday() {
   return `${value("year")}-${value("month")}-${value("day")}`;
 }
 
-function valueOrUnavailable(value: string | null) {
-  return value ?? "暂无数据";
-}
-
-function changeTone(value: string | null) {
-  const numericValue = Number.parseFloat(value?.replace("%", "") ?? "");
-  if (!Number.isFinite(numericValue) || numericValue === 0) return "flat";
-  return numericValue > 0 ? "up" : "down";
-}
-
-function formatChangePercent(value: string | null) {
-  if (!value) return "暂无数据";
-  const normalized = value.trim();
-  return normalized.endsWith("%") ? normalized : `${normalized}%`;
-}
-
-function safeErrorMessage(error: unknown, fallback: string) {
-  if (typeof error === "string" && error.trim()) return error;
+function safeErrorMessage(error: unknown) {
   if (error instanceof Error && error.message.trim()) return error.message;
-  if (typeof error === "object" && error && "message" in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string" && message.trim()) return message;
-  }
-  return fallback;
+  if (typeof error === "string" && error.trim()) return error;
+  return "AI复盘服务暂不可用";
+}
+
+function ReportTable({ review }: { review: AiReview }) {
+  const title = review.securityName
+    ? `${review.securityName}${review.securitySymbol ? ` · ${review.securitySymbol}` : ""}`
+    : "历史综合复盘";
+  return (
+    <article className="ai-report-wrap">
+      <div className="ai-report-heading">
+        <div><p className="section-kicker">{review.model}</p><h3>{title}</h3></div>
+        <span>仅供信息整理与观察，不构成交易建议。</span>
+      </div>
+      <div className="ai-report-table-scroll"><table className="ai-report-table"><thead><tr><th>分析维度</th><th>AI复盘结果</th></tr></thead><tbody>{review.report ? reportLabels.map(([label, key]) => <tr key={key}><th scope="row">{label}</th><td>{review.report?.[key] ?? "暂无数据"}</td></tr>) : <><tr><th scope="row">历史事实</th><td>{review.facts.join("\n")}</td></tr><tr><th scope="row">历史分析</th><td>{review.inferences.join("\n")}</td></tr><tr><th scope="row">历史风险</th><td>{review.risks.join("\n")}</td></tr></>}</tbody></table></div>
+      <details className="ai-audit-details"><summary>查看 FACTS / INFERENCES / RISKS 审计依据</summary><div className="ai-audit-grid"><section><strong>FACTS</strong><ul>{review.facts.map((item) => <li key={item}>{item}</li>)}</ul></section><section><strong>INFERENCES</strong><ul>{review.inferences.map((item) => <li key={item}>{item}</li>)}</ul></section><section><strong>RISKS</strong><ul>{review.risks.map((item) => <li key={item}>{item}</li>)}</ul></section></div></details>
+    </article>
+  );
 }
 
 export function ReviewPage() {
   const [reviewDate, setReviewDate] = useState(chinaToday);
-  const [review, setReview] = useState<DailyReview | null>(null);
+  const [reviews, setReviews] = useState<AiReview[]>([]);
+  const [providers, setProviders] = useState<AiProviderConfig[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [state, setState] = useState<AiGenerationState>("idle");
   const [message, setMessage] = useState<string | null>(null);
-  const [aiStatus, setAiStatus] = useState<AiServiceStatus | null>(null);
-  const [aiReview, setAiReview] = useState<AiReview | null>(null);
-  const [aiGenerationState, setAiGenerationState] = useState<AiGenerationState>("idle");
-  const [aiError, setAiError] = useState<string | null>(null);
 
   const load = useCallback(async (date: string) => {
     setIsLoading(true);
     try {
-      setReview(await loadDailyReview(date));
+      const [stored, configuredProviders] = await Promise.all([
+        loadAiReviewsForDate(date).catch(() => []),
+        loadAiProviderConfigs(),
+      ]);
+      setReviews(stored);
+      setProviders(configuredProviders);
+      setState(stored.length > 0 ? "success" : "idle");
       setMessage(null);
     } catch (error) {
-      setReview(null);
-      const text = error instanceof Error ? error.message : "";
-      setMessage(text.includes("暂无当日复盘") ? "暂无当日复盘" : "本地复盘服务暂不可用");
+      setMessage(safeErrorMessage(error));
     } finally {
       setIsLoading(false);
     }
@@ -76,91 +78,38 @@ export function ReviewPage() {
 
   useEffect(() => { void load(reviewDate); }, [load, reviewDate]);
 
-  useEffect(() => {
-    void loadAiServiceStatus().then(setAiStatus).catch(() => setAiStatus(null));
-  }, []);
-
-  useEffect(() => {
-    if (!review || !aiStatus?.configured) {
-      setAiReview(null);
-      setAiGenerationState("idle");
-      setAiError(null);
-      return;
-    }
-    void loadLatestAiReview(review.id)
-      .then((stored) => {
-        setAiReview(stored);
-        setAiGenerationState(stored ? "success" : "idle");
-      })
-      .catch((error) => {
-        setAiReview(null);
-        setAiGenerationState("failed");
-        setAiError(safeErrorMessage(error, "无法读取已保存的AI复盘"));
-      });
-  }, [aiStatus?.configured, review]);
-
   async function generate() {
-    setIsGenerating(true);
+    setState("generating");
+    setMessage(null);
     try {
-      setReview(await generateDailyReview(reviewDate));
-      setMessage("结构化复盘已生成");
+      const generated = await generateAiReviews(reviewDate);
+      setReviews(generated);
+      setState("success");
+      setMessage(`已生成 ${generated.length} 只关注标的的 AI复盘`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "复盘生成失败");
-    } finally {
-      setIsGenerating(false);
+      setState("failed");
+      setMessage(safeErrorMessage(error));
     }
   }
 
-  async function generateAi() {
-    if (!review) return;
-    setAiGenerationState("generating");
-    setAiError(null);
-    try {
-      setAiReview(await generateAiReview(review.reviewDate));
-      setAiGenerationState("success");
-      setMessage("AI辅助分析已生成");
-    } catch (error) {
-      const detail = safeErrorMessage(error, "DeepSeek 请求失败，未返回可用错误详情");
-      setAiReview(null);
-      setAiGenerationState("failed");
-      setAiError(detail);
-      setMessage(`AI复盘生成失败：${detail}`);
-    }
-  }
+  const selectedProvider = providers.find((provider) => provider.enabled && provider.configured);
 
   return (
     <section className="page review-page" aria-labelledby="review-title">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Structured daily review</p>
-          <h1 id="review-title">仓位复盘</h1>
-          <p>仅汇总本地关注标的、市场快照和关联资讯；AI 仅作结构化解释，不提供预测或买卖建议。</p>
+          <p className="eyebrow">AI research center</p>
+          <h1 id="review-title">AI复盘</h1>
+          <p>围绕每只关注标的的行情、公告、资讯、事件与市场环境生成可追溯分析。</p>
         </div>
-        <div className="review-actions"><label>复盘日期<input aria-label="复盘日期" onChange={(event) => setReviewDate(event.target.value)} type="date" value={reviewDate} /></label><button className="primary-button review-generate-button" disabled={isGenerating} onClick={() => void generate()} type="button">{isGenerating ? "正在生成…" : "生成当日复盘"}</button></div>
+        <div className="review-actions"><label>复盘日期<input aria-label="复盘日期" onChange={(event) => setReviewDate(event.target.value)} type="date" value={reviewDate} /></label><button className="primary-button review-generate-button" disabled={state === "generating" || !selectedProvider} onClick={() => void generate()} type="button">{state === "generating" ? "正在生成…" : "生成AI复盘"}</button></div>
       </header>
 
       {message ? <p className="notice" role="status">{message}</p> : null}
-      {isLoading ? <p className="table-state review-state">正在读取本地复盘…</p> : null}
-      {!isLoading && !review ? <p className="table-state review-state">暂无当日复盘</p> : null}
-      {!isLoading && review ? <div className="review-content">
-        <section className="review-section" aria-labelledby="market-review-title"><div className="section-heading"><div><p className="section-kicker">Market</p><h2 id="market-review-title">市场表现</h2></div><span>{review.marketSummary.snapshot ? `快照：${review.marketSummary.snapshot.status}` : "暂无当日市场快照"}</span></div><div className="review-index-list">{review.marketSummary.majorIndices.map((index) => <div className={`settings-card review-index review-index--${changeTone(index.changePercent)}`} key={index.symbol}><strong>{index.name}</strong><span>{index.symbol}</span><b>{formatChangePercent(index.changePercent)}</b><small>来源：{index.source ?? "暂无数据"} · 状态：{index.status}</small></div>)}</div></section>
-
-        <section className="review-section" aria-labelledby="holding-review-title"><div className="section-heading"><div><p className="section-kicker">Watchlist</p><h2 id="holding-review-title">关注标的动态</h2></div><span>基于已保存的市场快照</span></div><div className="review-contribution-list">{review.holdingSummary.contributions.length === 0 ? <p className="table-state">暂无关注标的</p> : review.holdingSummary.contributions.map((holding) => <div className="review-contribution" key={holding.symbol}><div><strong>{holding.name}</strong><span>{holding.symbol}</span></div><span>涨跌幅：{valueOrUnavailable(holding.changePercent)}</span></div>)}</div></section>
-
-        <section className="review-section" aria-labelledby="risk-review-title"><div className="section-heading"><div><p className="section-kicker">Facts only</p><h2 id="risk-review-title">风险提示</h2></div></div><div className="settings-card risk-card"><p>以下仅为已保存数据的事实性状态说明，不构成预测或交易建议。</p><ul>{review.riskSummary.facts.map((fact) => <li key={fact}>{fact}</li>)}</ul></div></section>
-      </div> : null}
-
-      <section className="review-section ai-review-section" aria-labelledby="ai-review-title">
-        <div className="section-heading"><div><p className="section-kicker">AI assistance</p><h2 id="ai-review-title">AI复盘</h2></div>{aiStatus?.configured && review ? <button className="secondary-button" disabled={aiGenerationState === "generating"} onClick={() => void generateAi()} type="button">{aiGenerationState === "generating" ? "正在生成…" : "重新生成AI分析"}</button> : null}</div>
-        <p className="ai-generation-status" role="status">AI生成状态：{aiGenerationState}</p>
-        {!aiStatus ? <div className="settings-card ai-empty-state">AI服务状态暂不可用</div> : null}
-        {aiStatus && !aiStatus.configured ? <div className="settings-card ai-empty-state">AI服务未配置</div> : null}
-        {aiStatus?.configured && !review ? <div className="settings-card ai-empty-state">请先生成当日结构化复盘</div> : null}
-        {aiGenerationState === "generating" ? <div className="settings-card ai-empty-state">正在向 DeepSeek 请求结构化复盘，请稍候。</div> : null}
-        {aiGenerationState === "failed" && aiError ? <div className="settings-card ai-empty-state ai-error-state" role="alert">生成失败：{aiError}</div> : null}
-        {aiStatus?.configured && review && !aiReview && aiGenerationState === "idle" ? <div className="settings-card ai-empty-state">尚未生成AI辅助分析</div> : null}
-        {aiStatus?.configured && aiReview ? <div className="ai-report-wrap"><div className="ai-report-heading"><div><p className="section-kicker">AI research report</p><h3>AI投研复盘报告</h3></div><span>仅供信息整理与观察，不构成交易建议。</span></div><div className="ai-report-table-scroll"><table className="ai-report-table"><thead><tr><th>分析维度</th><th>AI复盘结果</th></tr></thead><tbody>{aiReview.report ? reportLabels.map(([label, key]) => <tr key={key}><th scope="row">{label}</th><td>{aiReview.report?.[key] ?? "暂无数据"}</td></tr>) : <><tr><th scope="row">历史事实</th><td>{aiReview.facts.join("\n")}</td></tr><tr><th scope="row">历史分析</th><td>{aiReview.inferences.join("\n")}</td></tr><tr><th scope="row">历史风险</th><td>{aiReview.risks.join("\n")}</td></tr></>}</tbody></table></div><details className="ai-audit-details"><summary>查看 FACTS / INFERENCES / RISKS 审计依据</summary><div className="ai-audit-grid"><section><strong>FACTS</strong><ul>{aiReview.facts.map((item) => <li key={item}>{item}</li>)}</ul></section><section><strong>INFERENCES</strong><ul>{aiReview.inferences.map((item) => <li key={item}>{item}</li>)}</ul></section><section><strong>RISKS</strong><ul>{aiReview.risks.map((item) => <li key={item}>{item}</li>)}</ul></section></div></details></div> : null}
-      </section>
+      {!selectedProvider && !isLoading ? <div className="settings-card ai-empty-state">请先在设置中配置并开启一个 AI Provider。</div> : null}
+      {isLoading ? <p className="table-state review-state">正在读取已保存的 AI复盘…</p> : null}
+      {!isLoading && selectedProvider && reviews.length === 0 ? <div className="settings-card ai-empty-state">尚未生成当日 AI复盘。请先更新今日市场快照，再点击“生成AI复盘”。</div> : null}
+      {!isLoading && reviews.length > 0 ? <section className="ai-review-list" aria-label="AI复盘报告列表">{reviews.map((review) => <ReportTable key={review.id} review={review} />)}</section> : null}
     </section>
   );
 }

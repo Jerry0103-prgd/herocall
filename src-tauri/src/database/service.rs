@@ -250,6 +250,9 @@ pub struct AiReview {
     pub inferences: String,
     pub risks: String,
     pub report_json: Option<String>,
+    pub security_id: Option<i64>,
+    pub security_name: Option<String>,
+    pub security_symbol: Option<String>,
     pub created_at: String,
 }
 
@@ -264,6 +267,15 @@ pub struct NewAiReview {
     pub inferences: String,
     pub risks: String,
     pub report_json: Option<String>,
+    pub security_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiProviderSetting {
+    pub provider: String,
+    pub model: String,
+    pub enabled: bool,
+    pub priority: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -587,8 +599,8 @@ impl DatabaseService {
             "
             INSERT INTO ai_reviews (
                 review_id, model, prompt_version, context_id, provider, request_status,
-                facts, inferences, risks, report_json
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'COMPLETED', ?6, ?7, ?8, ?9)
+                facts, inferences, risks, report_json, security_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'COMPLETED', ?6, ?7, ?8, ?9, ?10)
             ",
             params![
                 input.review_id,
@@ -600,6 +612,7 @@ impl DatabaseService {
                 input.inferences,
                 input.risks,
                 input.report_json,
+                input.security_id,
             ],
         )?;
         self.get_ai_review(self.connection.last_insert_rowid())
@@ -784,9 +797,10 @@ impl DatabaseService {
         self.connection
             .query_row(
                 "
-                SELECT id, review_id, model, prompt_version, context_id, provider, request_status,
-                       error_code, facts, inferences, risks, report_json, created_at
-                FROM ai_reviews WHERE id = ?1
+                SELECT ar.id, ar.review_id, ar.model, ar.prompt_version, ar.context_id, ar.provider, ar.request_status,
+                       ar.error_code, ar.facts, ar.inferences, ar.risks, ar.report_json,
+                       ar.security_id, s.name, s.symbol, ar.created_at
+                FROM ai_reviews ar LEFT JOIN securities s ON s.id = ar.security_id WHERE ar.id = ?1
                 ",
                 [id],
                 Self::map_ai_review,
@@ -801,10 +815,11 @@ impl DatabaseService {
         self.connection
             .query_row(
                 "
-                SELECT id, review_id, model, prompt_version, context_id, provider, request_status,
-                       error_code, facts, inferences, risks, report_json, created_at
-                FROM ai_reviews WHERE review_id = ?1
-                ORDER BY created_at DESC, id DESC
+                SELECT ar.id, ar.review_id, ar.model, ar.prompt_version, ar.context_id, ar.provider, ar.request_status,
+                       ar.error_code, ar.facts, ar.inferences, ar.risks, ar.report_json,
+                       ar.security_id, s.name, s.symbol, ar.created_at
+                FROM ai_reviews ar LEFT JOIN securities s ON s.id = ar.security_id WHERE ar.review_id = ?1
+                ORDER BY ar.created_at DESC, ar.id DESC
                 LIMIT 1
                 ",
                 [review_id],
@@ -812,6 +827,49 @@ impl DatabaseService {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    pub fn list_ai_reviews_for_daily_review(
+        &self,
+        review_id: i64,
+    ) -> DatabaseResult<Vec<AiReview>> {
+        let mut statement = self.connection.prepare(
+            "
+            SELECT ar.id, ar.review_id, ar.model, ar.prompt_version, ar.context_id, ar.provider, ar.request_status,
+                   ar.error_code, ar.facts, ar.inferences, ar.risks, ar.report_json,
+                   ar.security_id, s.name, s.symbol, ar.created_at
+            FROM ai_reviews ar LEFT JOIN securities s ON s.id = ar.security_id
+            WHERE ar.review_id = ?1
+            ORDER BY CASE WHEN ar.security_id IS NULL THEN 1 ELSE 0 END, ar.created_at DESC, ar.id DESC
+            ",
+        )?;
+        let rows = statement.query_map([review_id], Self::map_ai_review)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn list_ai_provider_settings(&self) -> DatabaseResult<Vec<AiProviderSetting>> {
+        let mut statement = self.connection.prepare(
+            "SELECT provider, model, enabled, priority FROM ai_provider_settings ORDER BY priority ASC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(AiProviderSetting {
+                provider: row.get(0)?,
+                model: row.get(1)?,
+                enabled: row.get::<_, i64>(2)? != 0,
+                priority: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn set_ai_provider_enabled(&self, provider: &str, enabled: bool) -> DatabaseResult<()> {
+        if self.connection.execute(
+            "UPDATE ai_provider_settings SET enabled = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE provider = ?1",
+            params![provider, i64::from(enabled)],
+        )? == 0 {
+            return Err(DatabaseError::AppPath("AI Provider 未确认".into()));
+        }
+        Ok(())
     }
 
     pub fn list_events(&self) -> DatabaseResult<Vec<EventWithSecurity>> {
@@ -1643,7 +1701,10 @@ impl DatabaseService {
             inferences: row.get(9)?,
             risks: row.get(10)?,
             report_json: row.get(11)?,
-            created_at: row.get(12)?,
+            security_id: row.get(12)?,
+            security_name: row.get(13)?,
+            security_symbol: row.get(14)?,
+            created_at: row.get(15)?,
         })
     }
 
@@ -2036,15 +2097,15 @@ mod tests {
                     'market_snapshots', 'market_quotes', 'data_sources', 'news_articles',
                     'daily_reviews', 'ai_reviews', 'events', 'app_settings', 'market_index_quotes',
                     'manual_refresh_runs', 'ai_review_contexts', 'manual_refresh_news_articles',
-                    'manual_refresh_events', 'watchlist_items'
+                    'manual_refresh_events', 'watchlist_items', 'ai_provider_settings'
                 )",
                 [],
                 |row| row.get(0),
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 14);
-        assert_eq!(table_count, 18);
+        assert_eq!(migration_count, 16);
+        assert_eq!(table_count, 19);
     }
 
     #[test]
@@ -2269,8 +2330,20 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("verify AI report column");
+        let ai_review_security_column: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('ai_reviews') WHERE name = 'security_id'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("verify per-security AI review column");
+        let ai_provider_setting_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM ai_provider_settings", [], |row| {
+                row.get(0)
+            })
+            .expect("verify provider settings migration");
 
-        assert_eq!(migration_count, 14);
+        assert_eq!(migration_count, 16);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -2290,6 +2363,8 @@ mod tests {
         assert_eq!(ai_contexts_exists, 1);
         assert_eq!(ai_review_provider_column, 1);
         assert_eq!(ai_review_report_column, 1);
+        assert_eq!(ai_review_security_column, 1);
+        assert_eq!(ai_provider_setting_count, 3);
         assert_eq!(watchlist_item_count, 1);
         assert_eq!(market_index_quotes_exists, 1);
     }
@@ -2340,7 +2415,7 @@ mod tests {
             })
             .expect("read migration count");
         assert_eq!(quote, ("000001.SH".into(), "1.25".into(), "1.25".into()));
-        assert_eq!(migration_count, 14);
+        assert_eq!(migration_count, 16);
 
         let database = DatabaseService { connection };
         let records = database

@@ -7,6 +7,19 @@ type ReleaseNote = {
 
 const releaseNotes: ReleaseNote[] = [
   {
+    version: "V1.0.4",
+    date: "2026-08-09",
+    summary: "AI复盘中心与多 Provider 支持",
+    groups: [
+      { title: "更新", items: [
+        "仓位复盘升级为 AI复盘中心",
+        "按关注标的生成独立 AI 投研报告",
+        "新增腾讯混元、豆包 Provider 配置",
+        "优化系统同步时间的北京时间展示",
+      ] },
+    ],
+  },
+  {
     version: "V1.0.3",
     date: "2026-08-09",
     summary: "关注管理与 AI 投研复盘升级",

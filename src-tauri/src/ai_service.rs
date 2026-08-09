@@ -21,10 +21,13 @@ use crate::{
     event_service::{EventService, EventServiceError},
     news_service::{NewsService, NewsServiceError},
     review_service::{DailyReviewView, ReviewService, ReviewServiceError},
-    secure_storage::{get_deepseek_status, load_deepseek_api_key_for_adapter},
+    secure_storage::{
+        get_ai_provider_key_status, get_deepseek_status, load_ai_provider_api_key_for_adapter,
+        load_deepseek_api_key_for_adapter,
+    },
 };
 
-const PROMPT_VERSION: &str = "deepseek-research-report-v2";
+const PROMPT_VERSION: &str = "ai-research-report-v3";
 const DEEPSEEK_CHAT_COMPLETIONS_URL: &str = "https://api.deepseek.com/chat/completions";
 const DEEPSEEK_MODEL: &str = "deepseek-chat";
 
@@ -33,6 +36,17 @@ const DEEPSEEK_MODEL: &str = "deepseek-chat";
 pub struct AiServiceStatusView {
     pub configured: bool,
     pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiProviderConfigView {
+    pub provider: String,
+    pub display_name: String,
+    pub model: String,
+    pub configured: bool,
+    pub enabled: bool,
+    pub priority: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -80,6 +94,9 @@ pub struct AiReviewView {
     pub inferences: Vec<String>,
     pub risks: Vec<String>,
     pub report: Option<AiResearchReport>,
+    pub security_id: Option<i64>,
+    pub security_name: Option<String>,
+    pub security_symbol: Option<String>,
     pub created_at: String,
 }
 
@@ -95,6 +112,9 @@ pub struct AiReviewInput {
     pub market: Value,
     pub news: Value,
     pub events: Value,
+    pub security_id: i64,
+    pub security_name: String,
+    pub security_symbol: String,
 }
 
 pub trait AiProviderAdapter {
@@ -112,19 +132,19 @@ pub struct AiProviderError {
 impl AiProviderError {
     fn unavailable() -> Self {
         Self {
-            message: "DeepSeek 网络请求失败".into(),
+            message: "AI Provider 网络请求失败".into(),
         }
     }
     fn invalid_response(reason: impl fmt::Display) -> Self {
         Self {
-            message: format!("DeepSeek 返回格式错误：{reason}"),
+            message: format!("AI Provider 返回格式错误：{reason}"),
         }
     }
     fn http_error(status: u16, body: &str) -> Self {
         let category = match status {
-            401 | 403 => "DeepSeek API认证失败",
-            429 => "DeepSeek API请求过于频繁",
-            _ => "DeepSeek API请求失败",
+            401 | 403 => "AI Provider API认证失败",
+            429 => "AI Provider API请求过于频繁",
+            _ => "AI Provider API请求失败",
         };
         let detail = (!body.is_empty()).then(|| format!("：{body}"));
         Self {
@@ -190,6 +210,70 @@ impl AiProviderAdapter for DeepSeekProviderAdapter {
             ai_diagnostic(format!("json_parse_failed=true reason={error}"));
             AiProviderError::invalid_response(error)
         })
+    }
+}
+
+/// OpenAI-compatible provider boundary shared by the selectable providers. Only the selected
+/// provider receives a request; its Keychain key remains in this adapter and never crosses IPC.
+struct OpenAiCompatibleProviderAdapter {
+    provider: &'static str,
+    model: String,
+    endpoint: &'static str,
+    api_key: String,
+}
+
+impl AiProviderAdapter for OpenAiCompatibleProviderAdapter {
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    fn provider(&self) -> &str {
+        self.provider
+    }
+
+    fn generate(&self, input: &AiReviewInput) -> Result<AiReviewSections, AiProviderError> {
+        let prompt = serde_json::to_string(input).map_err(|_| AiProviderError::unavailable())?;
+        let response = curl_ai_request(
+            self.endpoint,
+            &self.api_key,
+            &json!({
+                "model": self.model,
+                "stream": false,
+                "temperature": 0,
+                "response_format": { "type": "json_object" },
+                "messages": [
+                  { "role": "system", "content": research_report_system_prompt() },
+                  { "role": "user", "content": prompt }
+                ]
+            }),
+        )?;
+        let content = response
+            .pointer("/choices/0/message/content")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AiProviderError::invalid_response("缺少 choices[0].message.content"))?;
+        parse_and_validate_provider_sections(content).map_err(AiProviderError::invalid_response)
+    }
+}
+
+fn research_report_system_prompt() -> &'static str {
+    "你是个人A股关注标的的解释助手。仅依据输入 JSON，输出严格 JSON 对象，必须包含：facts:[string]、inferences:[string]、risks:[string]、stock_status:string、market_analysis:string、sector_analysis:string、news_analysis:string、technical_analysis:string、strategy_reference:string、conclusion:string。FACTS 只陈述有来源和时间的输入事实；INFERENCES 必须是基于这些事实的解释；RISKS 只列不确定性、数据缺失或需核验事项。七项报告依次为：当前个股情况、当前市场环境影响、所属板块分析、消息面分析、技术面分析、策略参考、综合结论。仅讨论本次输入的单只关注标的，不得提及持仓成本、盈亏、是否实际持仓或账户资产。无行业、新闻或技术指标时须明确“未确认”或“暂无数据”，不得补造内容。策略参考只能描述关注逻辑、风险关注和后续观察条件；综合结论只能总结当前判断。社区观点不能作为事实。严禁买入、卖出、加仓、减仓、建仓、清仓、推荐、目标价、收益预测、收益承诺、保证收益、必涨，且不得补造事实。"
+}
+
+fn provider_display_name(provider: &str) -> &'static str {
+    match provider {
+        "DEEPSEEK" => "DeepSeek",
+        "TENCENT_HUNYUAN" => "腾讯混元",
+        "DOUBAO" => "豆包",
+        _ => "未确认 Provider",
+    }
+}
+
+fn provider_static_name(provider: &str) -> Result<&'static str, AiServiceError> {
+    match provider {
+        "DEEPSEEK" => Ok("DEEPSEEK"),
+        "TENCENT_HUNYUAN" => Ok("TENCENT_HUNYUAN"),
+        "DOUBAO" => Ok("DOUBAO"),
+        _ => Err(AiServiceError::NotConfigured),
     }
 }
 
@@ -263,6 +347,88 @@ impl AiService {
             model: configured.then(|| DEEPSEEK_MODEL.into()),
         }
     }
+
+    pub fn provider_configs(
+        database: &DatabaseService,
+    ) -> Result<Vec<AiProviderConfigView>, AiServiceError> {
+        database
+            .list_ai_provider_settings()?
+            .into_iter()
+            .map(|setting| {
+                let configured = get_ai_provider_key_status(&setting.provider)
+                    .map(|status| status.status == "已配置")
+                    .unwrap_or(false);
+                Ok(AiProviderConfigView {
+                    display_name: provider_display_name(&setting.provider).into(),
+                    provider: setting.provider,
+                    model: setting.model,
+                    configured,
+                    enabled: setting.enabled,
+                    priority: setting.priority,
+                })
+            })
+            .collect()
+    }
+
+    pub fn set_provider_enabled(
+        database: &DatabaseService,
+        provider: &str,
+        enabled: bool,
+    ) -> Result<Vec<AiProviderConfigView>, AiServiceError> {
+        if enabled
+            && get_ai_provider_key_status(provider)
+                .map_err(|_| AiServiceError::KeychainUnavailable)?
+                .status
+                != "已配置"
+        {
+            return Err(AiServiceError::NotConfigured);
+        }
+        database.set_ai_provider_enabled(provider, enabled)?;
+        Self::provider_configs(database)
+    }
+
+    pub fn generate_all_from_runtime(
+        database: &DatabaseService,
+        review_date: &str,
+    ) -> Result<Vec<AiReviewView>, AiServiceError> {
+        let result = (|| {
+            let _ = ReviewService::generate(database, review_date)?;
+            let adapter = Self::selected_runtime_provider(database)?;
+            Self::generate_for_all_followed_securities(database, review_date, &adapter)
+        })();
+        if let Err(error) = &result {
+            ai_diagnostic(format!("rust_final_error={error}"));
+        }
+        result
+    }
+
+    fn selected_runtime_provider(
+        database: &DatabaseService,
+    ) -> Result<OpenAiCompatibleProviderAdapter, AiServiceError> {
+        for setting in database.list_ai_provider_settings()? {
+            if !setting.enabled {
+                continue;
+            }
+            let Some(api_key) = load_ai_provider_api_key_for_adapter(&setting.provider)
+                .map_err(|_| AiServiceError::KeychainUnavailable)?
+            else {
+                continue;
+            };
+            let endpoint = match setting.provider.as_str() {
+                "DEEPSEEK" => DEEPSEEK_CHAT_COMPLETIONS_URL,
+                "TENCENT_HUNYUAN" => "https://api.hunyuan.cloud.tencent.com/v1/chat/completions",
+                "DOUBAO" => "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+                _ => continue,
+            };
+            return Ok(OpenAiCompatibleProviderAdapter {
+                provider: provider_static_name(&setting.provider)?,
+                model: setting.model,
+                endpoint,
+                api_key,
+            });
+        }
+        Err(AiServiceError::NotConfigured)
+    }
     pub fn generate_from_runtime(
         database: &DatabaseService,
         review_date: &str,
@@ -305,6 +471,9 @@ impl AiService {
             market,
             news: json!({"status": if news_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": news_items}),
             events: json!({"status": if event_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": event_items}),
+            security_id: 0,
+            security_name: "历史综合复盘".into(),
+            security_symbol: String::new(),
         };
         ai_diagnostic(format!(
             "ai_context_generated=true manual_refresh_run_id={} holding_quotes={} index_quotes={} news_items={} event_items={}",
@@ -340,8 +509,140 @@ impl AiService {
             inferences: serde_json::to_string(&sections.inferences)?,
             risks: serde_json::to_string(&sections.risks)?,
             report_json: Some(serde_json::to_string(&report)?),
+            security_id: None,
         })?;
         Self::view_from_record(stored)
+    }
+
+    fn generate_for_all_followed_securities<P: AiProviderAdapter>(
+        database: &DatabaseService,
+        review_date: &str,
+        provider: &P,
+    ) -> Result<Vec<AiReviewView>, AiServiceError> {
+        let daily_review = ReviewService::get(database, review_date)?;
+        let run = database
+            .latest_manual_refresh_run()?
+            .ok_or(AiServiceError::NoManualSnapshot)?;
+        let portfolio: Value = serde_json::from_str(&run.portfolio_json)?;
+        let all_holding_quotes =
+            database.list_market_quotes_for_snapshot(run.holdings_snapshot_id)?;
+        let index_quotes =
+            database.list_market_index_quotes_for_snapshot(run.indices_snapshot_id)?;
+        let all_news = NewsService::list_for_manual_refresh_run(database, run.id)?;
+        let all_events = EventService::list_for_manual_refresh_run(database, run.id)?;
+        let securities = database.list_market_securities_for_holdings()?;
+        if securities.is_empty() {
+            return Err(AiServiceError::Context("当前没有关注标的".into()));
+        }
+
+        let mut generated = Vec::with_capacity(securities.len());
+        for security in securities {
+            let security_marker = format!("({})", security.symbol);
+            let security_portfolio = portfolio
+                .as_array()
+                .and_then(|items| {
+                    items.iter().find(|item| {
+                        item.get("symbol").and_then(Value::as_str) == Some(&security.symbol)
+                    })
+                })
+                .cloned()
+                .unwrap_or_else(|| {
+                    json!({"symbol": security.symbol, "name": security.name, "status": "关注标的"})
+                });
+            let holding_quotes = all_holding_quotes
+                .iter()
+                .filter(|quote| quote.symbol == security.symbol)
+                .collect::<Vec<_>>();
+            let news_items = all_news
+                .iter()
+                .filter(|article| {
+                    article
+                        .related_security
+                        .as_deref()
+                        .is_some_and(|related| related.contains(&security_marker))
+                })
+                .collect::<Vec<_>>();
+            let event_items = all_events
+                .iter()
+                .filter(|event| {
+                    event
+                        .related_security
+                        .as_deref()
+                        .is_some_and(|related| related.contains(&security_marker))
+                })
+                .collect::<Vec<_>>();
+            let input = AiReviewInput {
+                prompt_version: PROMPT_VERSION.into(),
+                manual_refresh_run_id: run.id,
+                daily_review: daily_review.clone(),
+                portfolio: security_portfolio,
+                market: json!({
+                    "holding": holding_quotes,
+                    "indices": index_quotes,
+                    "snapshotCompletedAt": run.completed_at,
+                }),
+                news: json!({"status": if news_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": news_items}),
+                events: json!({"status": if event_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": event_items}),
+                security_id: security.security_id,
+                security_name: security.name,
+                security_symbol: security.symbol,
+            };
+            generated.push(Self::generate_for_security_with_provider(
+                database, &input, provider,
+            )?);
+        }
+        Ok(generated)
+    }
+
+    fn generate_for_security_with_provider<P: AiProviderAdapter>(
+        database: &DatabaseService,
+        input: &AiReviewInput,
+        provider: &P,
+    ) -> Result<AiReviewView, AiServiceError> {
+        ai_diagnostic(format!(
+            "ai_context_generated=true manual_refresh_run_id={} security_id={} holding_quotes={} index_quotes={} news_items={} event_items={}",
+            input.manual_refresh_run_id,
+            input.security_id,
+            input.market["holding"].as_array().map_or(0, Vec::len),
+            input.market["indices"].as_array().map_or(0, Vec::len),
+            input.news["items"].as_array().map_or(0, Vec::len),
+            input.events["items"].as_array().map_or(0, Vec::len),
+        ));
+        let sections = provider.generate(input)?;
+        validate_sections(&sections)?;
+        let report = report_from_sections(&sections)?;
+        let context_id = database.create_ai_review_context(NewAiReviewContext {
+            review_id: input.daily_review.id,
+            manual_refresh_run_id: input.manual_refresh_run_id,
+            portfolio_json: serde_json::to_string(&input.portfolio)?,
+            market_json: serde_json::to_string(&input.market)?,
+            news_json: serde_json::to_string(&input.news)?,
+            events_json: serde_json::to_string(&input.events)?,
+        })?;
+        let stored = database.create_ai_review(NewAiReview {
+            review_id: input.daily_review.id,
+            model: provider.model().into(),
+            prompt_version: input.prompt_version.clone(),
+            context_id,
+            provider: provider.provider().into(),
+            facts: serde_json::to_string(&sections.facts)?,
+            inferences: serde_json::to_string(&sections.inferences)?,
+            risks: serde_json::to_string(&sections.risks)?,
+            report_json: Some(serde_json::to_string(&report)?),
+            security_id: Some(input.security_id),
+        })?;
+        Self::view_from_record(stored)
+    }
+
+    pub fn list_for_review(
+        database: &DatabaseService,
+        review_id: i64,
+    ) -> Result<Vec<AiReviewView>, AiServiceError> {
+        database
+            .list_ai_reviews_for_daily_review(review_id)?
+            .into_iter()
+            .map(Self::view_from_record)
+            .collect()
     }
     pub fn latest_for_review(
         database: &DatabaseService,
@@ -383,6 +684,9 @@ impl AiService {
             inferences: sections.inferences,
             risks: sections.risks,
             report,
+            security_id: record.security_id,
+            security_name: record.security_name,
+            security_symbol: record.security_symbol,
             created_at: record.created_at,
         })
     }
@@ -519,7 +823,7 @@ fn curl_ai_request(url: &str, api_key: &str, body: &Value) -> Result<Value, AiPr
             .wait_with_output()
             .map_err(|_| AiProviderError::unavailable())?;
         if !output.status.success() {
-            ai_diagnostic("deepseek_http_status=NETWORK_FAILURE api_error_body=<unavailable>");
+            ai_diagnostic("ai_provider_http_status=NETWORK_FAILURE api_error_body=<unavailable>");
             return Err(AiProviderError::unavailable());
         }
         let status = std::str::from_utf8(&output.stdout)
@@ -530,11 +834,11 @@ fn curl_ai_request(url: &str, api_key: &str, body: &Value) -> Result<Value, AiPr
         if !(200..300).contains(&status) {
             let safe_body = sanitize_api_error_body(&response_body, api_key);
             ai_diagnostic(format!(
-                "deepseek_http_status={status} api_error_body={safe_body}"
+                "ai_provider_http_status={status} api_error_body={safe_body}"
             ));
             return Err(AiProviderError::http_error(status, &safe_body));
         }
-        ai_diagnostic(format!("deepseek_http_status={status}"));
+        ai_diagnostic(format!("ai_provider_http_status={status}"));
         serde_json::from_slice(&response_body).map_err(|error| {
             ai_diagnostic(format!("json_parse_failed=true reason={error}"));
             AiProviderError::invalid_response(error)
@@ -759,6 +1063,32 @@ mod tests {
             Err(AiProviderError::unavailable())
         }
     }
+
+    struct FollowedSecurityProvider;
+    impl AiProviderAdapter for FollowedSecurityProvider {
+        fn model(&self) -> &str {
+            "followed-security-test-model"
+        }
+
+        fn generate(&self, input: &AiReviewInput) -> Result<AiReviewSections, AiProviderError> {
+            assert_eq!(input.security_symbol, "600519");
+            assert_eq!(input.security_name, "贵州茅台");
+            assert_eq!(input.news["status"], "NO_DATA");
+            assert_eq!(input.events["status"], "NO_DATA");
+            Ok(AiReviewSections {
+                facts: vec!["已保存行情快照仅供事实核验。".into()],
+                inferences: vec!["关注标的分析只基于本次已保存数据。".into()],
+                risks: vec!["板块与技术指标需要结合后续数据核验。".into()],
+                stock_status: Some("当前个股情况以已保存行情快照为准。".into()),
+                market_analysis: Some("当前市场环境以已保存指数快照为准。".into()),
+                sector_analysis: Some("暂无可核验的板块数据。".into()),
+                news_analysis: Some("暂无关联资讯数据。".into()),
+                technical_analysis: Some("暂无完整技术指标。".into()),
+                strategy_reference: Some("持续观察行情、板块和消息面的后续变化。".into()),
+                conclusion: Some("当前结论仅基于本次已保存数据。".into()),
+            })
+        }
+    }
     #[test]
     fn no_key_is_unconfigured() {
         assert!(matches!(
@@ -799,6 +1129,44 @@ mod tests {
             .is_none());
         assert_eq!(database.ai_review_context_count().unwrap(), 0);
     }
+
+    #[test]
+    fn followed_securities_receive_independent_reviews_and_contexts() {
+        let database = DatabaseService::open_in_memory().unwrap();
+        let review = stored_review_and_snapshot(&database);
+        let security = database
+            .create_security(crate::database::service::NewSecurity {
+                symbol: "600519".into(),
+                name: "贵州茅台".into(),
+                market: "SSE".into(),
+                exchange: "SSE".into(),
+                security_type: "STOCK".into(),
+                industry: None,
+                concepts_json: "[]".into(),
+                trade_rule: "T_PLUS_1".into(),
+            })
+            .unwrap();
+        database.create_watchlist_item(security.id).unwrap();
+
+        let generated = AiService::generate_for_all_followed_securities(
+            &database,
+            "2026-08-08",
+            &FollowedSecurityProvider,
+        )
+        .unwrap();
+
+        assert_eq!(generated.len(), 1);
+        assert_eq!(generated[0].security_id, Some(security.id));
+        assert_eq!(generated[0].security_symbol.as_deref(), Some("600519"));
+        assert_eq!(database.ai_review_context_count().unwrap(), 1);
+        assert_eq!(
+            AiService::list_for_review(&database, review.id)
+                .unwrap()
+                .first()
+                .and_then(|item| item.security_id),
+            Some(security.id)
+        );
+    }
     #[test]
     fn invalid_json_and_prohibited_content_are_rejected() {
         assert!(parse_and_validate_provider_sections(r#"{"facts":[]}"#).is_err());
@@ -836,6 +1204,7 @@ mod tests {
                 inferences: serde_json::to_string(&vec!["已保存分析".to_string()]).unwrap(),
                 risks: serde_json::to_string(&vec!["已保存风险".to_string()]).unwrap(),
                 report_json: None,
+                security_id: None,
             })
             .unwrap();
 

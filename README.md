@@ -1,4 +1,6 @@
-# AStock-AI-Workbench
+# Hero Call
+
+> AI Portfolio Assistant
 
 > A股个人 AI 投研工作台
 
@@ -6,7 +8,7 @@
 
 ## 当前状态
 
-项目已完成基础工程初始化、金融领域数据库、Portfolio Engine、Market Data Engine、Dashboard、持仓管理、设置、财经资讯、仓位复盘、AI 辅助复盘、事件日历和首次启动向导：包含 Tauri 2、React、TypeScript、Rust、SQLite 迁移框架，纯 Rust 的移动平均成本、已实现/未实现盈亏、T+1/T+0/UNKNOWN 可卖规则计算，以及 Tushare/东方财富/腾讯 Adapter、行情规范化与快照持久化。首次启动向导允许跳过人民币现金、初始持仓与数据源状态查看，并只在本地 SQLite 保存非敏感完成标志；Tushare Token 只保存到系统凭据库，不保存或显示。财经资讯支持本地可追溯存储、持仓关联查询与官方/媒体/社区 Adapter 契约；本阶段尚未接入外部资讯源，不写入演示或虚构新闻。仓位复盘汇总账户、市场、持仓贡献排序和事实性风险状态；AI 辅助复盘只解释已保存结构化数据，固定输出 `FACTS`、`INFERENCES`、`RISKS`，并拦截投资建议、目标价和收益预测。未配置 AI Provider 时显示“AI服务未配置”，不发起请求。事件日历支持已保存事件的来源、原始带时区时间、确认状态和持仓关联优先展示，但尚未接入外部事件源或推测日期。Dashboard、“我的持仓”和“设置”均通过 Tauri Command 访问 Rust 服务；设置页支持安全配置 Tushare、手工新增人民币现金账户和 SQLite 立即备份。数据未验证或尚无后端聚合时显示“暂无数据”。当前不包含行情调度。
+项目已完成基础工程初始化、金融领域数据库、Portfolio Engine、Market Data Engine、Dashboard、我的关注、设置、财经资讯、AI复盘、事件日历和首次启动向导：包含 Tauri 2、React、TypeScript、Rust、SQLite 迁移框架，以及 Tushare/东方财富/腾讯 Adapter、行情规范化与用户主动保存的市场快照。财经资讯、事件只保存可追溯的真实来源结果；没有可验证的数据时显示“暂无数据”或“未确认”。AI复盘针对每只关注标的独立生成报告，固定保留 `FACTS`、`INFERENCES`、`RISKS` 审计内容，并按当前情况、市场环境、板块、消息、技术、策略参考与结论展示。支持 DeepSeek、腾讯混元、豆包的独立 Keychain 配置；每次只调用优先级最高且已开启、已配置的一个 Provider。API Key 不写入 SQLite、源码、日志或前端。AI 不提供直接交易指令、目标价、收益预测或收益承诺。
 
 Dashboard 的“更新今日市场快照”是唯一的行情触发入口：每次点击只执行一次请求并保存当前持仓与四个主要指数的快照，绝不轮询、常驻连接或高频请求。默认按东方财富公开行情、腾讯公开行情的 Adapter 顺序尝试；两者都必须显示 `DELAYED`，不得称为实时。配置 Tushare Token 后会优先使用其可追溯日线数据（`CLOSED`）；Token 只保存在 macOS Keychain，前端只能看到“已配置/未配置”。新闻和事件 Adapter 尚未配置时，本次更新明确返回 `NO_DATA`，不会写入演示内容。资产摘要由 Rust 根据本地现金、有效收盘报价和持仓成本计算；缺少任何必要报价时保持“暂无数据”。
 

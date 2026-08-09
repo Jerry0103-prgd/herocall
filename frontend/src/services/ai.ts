@@ -14,6 +14,9 @@ export type AiReview = {
   inferences: string[];
   risks: string[];
   report: AiResearchReport | null;
+  securityId: number | null;
+  securityName: string | null;
+  securitySymbol: string | null;
   createdAt: string;
 };
 
@@ -28,6 +31,15 @@ export type AiResearchReport = {
 };
 
 export type DeepSeekStatus = { status: "已配置" | "未配置" };
+
+export type AiProviderConfig = {
+  provider: "DEEPSEEK" | "TENCENT_HUNYUAN" | "DOUBAO";
+  displayName: string;
+  model: string;
+  configured: boolean;
+  enabled: boolean;
+  priority: number;
+};
 
 export function loadDeepSeekStatus(): Promise<DeepSeekStatus> {
   return invoke<DeepSeekStatus>("get_deepseek_status");
@@ -51,4 +63,28 @@ export function loadLatestAiReview(reviewId: number): Promise<AiReview | null> {
 
 export function generateAiReview(reviewDate: string): Promise<AiReview> {
   return invoke<AiReview>("generate_ai_review_for_snapshot", { reviewDate });
+}
+
+export function loadAiProviderConfigs(): Promise<AiProviderConfig[]> {
+  return invoke<AiProviderConfig[]>("get_ai_provider_configs");
+}
+
+export function saveAiProviderApiKey(provider: AiProviderConfig["provider"], key: string): Promise<DeepSeekStatus> {
+  return invoke<DeepSeekStatus>("save_ai_provider_api_key", { provider, key });
+}
+
+export function removeAiProviderApiKey(provider: AiProviderConfig["provider"]): Promise<DeepSeekStatus> {
+  return invoke<DeepSeekStatus>("remove_ai_provider_api_key", { provider });
+}
+
+export function setAiProviderEnabled(provider: AiProviderConfig["provider"], enabled: boolean): Promise<AiProviderConfig[]> {
+  return invoke<AiProviderConfig[]>("set_ai_provider_enabled", { provider, enabled });
+}
+
+export function generateAiReviews(reviewDate: string): Promise<AiReview[]> {
+  return invoke<AiReview[]>("generate_ai_reviews_for_snapshot", { reviewDate });
+}
+
+export function loadAiReviewsForDate(reviewDate: string): Promise<AiReview[]> {
+  return invoke<AiReview[]>("get_ai_reviews_for_date", { reviewDate });
 }

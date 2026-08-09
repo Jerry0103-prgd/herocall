@@ -30,10 +30,11 @@
 | `manual_refresh_events` | `manual_refresh_run_id`, `event_id` | 本次手动快照实际采集并保存的持仓关联事件；用于冻结 AI Context 的事件边界 |
 | `ai_review_contexts` | `id`, `review_id`, `manual_refresh_run_id`, `portfolio_json`, `market_json`, `news_json`, `events_json`, `created_at` | 一次成功 AI 调用的审计输入快照；不保存 API Key 或提示词全文 |
 | `ai_reviews` | `id`, `review_id`, `context_id`, `provider`, `model`, `prompt_version`, `request_status`, `facts`, `inferences`, `risks`, `report_json`, `created_at` | 对已保存每日复盘的 AI 辅助解释；原三段内容为安全审计记录，`report_json` 保存 V1.0.3 七项投研报告字段，均须经结构与禁止词校验后才可落库 |
+| `ai_provider_settings` | `provider`, `model`, `enabled`, `priority`, `updated_at` | 非敏感 AI Provider 偏好；仅保存启用状态、模型与调用优先级，API Key 仅存 macOS Keychain |
 | `events` | `id`, `event_type`, `title`, `security_id`, `event_time`, `timezone`, `source`, `source_url`, `status`, `created_at` | 投资事件日历；支持财报、分红、除权除息、股东大会、宏观数据和美联储会议，保留来源、原始带时区时间及确认状态 |
 | `app_settings` | `setting_key`, `setting_value`, `updated_at` | 非敏感应用状态；V0.8.1 仅保存首次启动完成标志，禁止存储 API Key、Token 或券商信息 |
 
-`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）至 `014`（关注关系分离与 AI 投研报告）；迁移重复执行不会重新执行已应用版本，已应用迁移的校验标识不匹配会阻止继续启动。
+`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）至 `016`（多 Provider 配置与逐证券 AI 报告）；迁移重复执行不会重新执行已应用版本，已应用迁移的校验标识不匹配会阻止继续启动。
 
 ## 3. 延后实现的逻辑实体
 
@@ -50,7 +51,8 @@
 - `market_snapshots` 与 `market_quotes` 分别按来源和证券时间建立索引，支持后续可追溯查询。
 - `news_articles` 强制要求标题、来源、来源类型、发布时间、抓取时间、摘要和 HTTP(S) 原文地址；原文地址唯一，关联证券删除时仅清除关联而保留资讯审计记录。按发布时间及关联证券建立索引，持仓页查询只返回存在当前持仓关联的记录。
 - `daily_reviews.review_date` 唯一；同一日期重新生成时原子更新四个摘要和关联快照，绝不生成第二条同日复盘。快照删除时复盘保留但 `snapshot_id` 设为空，以保留生成时的结构化事实和“未确认”状态。
-- `ai_reviews` 使用外键关联 `daily_reviews`，每日复盘删除时其 AI 辅助解释一并删除；`context_id` 关联冻结的 `ai_review_contexts`，后者再关联一次 `manual_refresh_runs`。迁移 `014` 新增可空 `report_json`，历史记录保持原三段字段且可继续读取；新记录必须同时保存七项报告与 `FACTS`、`INFERENCES`、`RISKS` 审计内容。运行时 API Key 不进入此表或其他 SQLite 表。
+- `ai_reviews` 使用外键关联 `daily_reviews`，每日复盘删除时其 AI 辅助解释一并删除；`context_id` 关联冻结的 `ai_review_contexts`，后者再关联一次 `manual_refresh_runs`。迁移 `014` 新增可空 `report_json`，迁移 `016` 新增可空 `security_id`；历史整体复盘保持可读取，新复盘一条记录仅对应一只关注证券。新记录必须同时保存七项报告与 `FACTS`、`INFERENCES`、`RISKS` 审计内容。运行时 API Key 不进入此表或其他 SQLite 表。
+- `ai_provider_settings` 由迁移 `015` 初始化 DeepSeek、腾讯混元、豆包的模型、优先级与启用状态。运行时只选择优先级最高且同时“已开启/已配置”的一个 Provider，绝不自动并行调用多个模型。
 - `events.event_type` 支持 `EARNINGS`、`COMPANY_ANNOUNCEMENT`、`MAJOR_MATTER`、`DIVIDEND`、`EX_DIVIDEND`、`SHAREHOLDER_MEETING`、`MACRO_DATA`、`FED_MEETING`；`status` 仅允许 `CONFIRMED`、`UNCONFIRMED`、`ARCHIVED`。`security_id` 可为空以支持宏观/FED 事件；证券删除时只清除关联、保留事件。查询先标识当前持仓关联事件，再按解析后的原始带时区时间排序，不推断日期或状态。
 - `manual_refresh_news_articles` 与 `manual_refresh_events` 仅关联一次用户主动刷新中由 Adapter 实际返回、经校验并已保存的记录。AI Context 从这两张关联表读取，不会在生成 AI 复盘时重新请求数据或补造新闻、事件。
 - `app_settings` 仅保存产品运行状态。首次启动向导使用 `initialization_completed=true` 表示完成；该值在数据库重启后保留。不得将配置密钥、个人凭据或任何金融数据写入该表。

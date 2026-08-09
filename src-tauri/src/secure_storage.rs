@@ -11,6 +11,8 @@ use keyring::Entry;
 const SERVICE_NAME: &str = "com.astockai.workbench";
 const TUSHARE_ACCOUNT_NAME: &str = "tushare-token";
 const DEEPSEEK_ACCOUNT_NAME: &str = "deepseek-api-key";
+const TENCENT_HUNYUAN_ACCOUNT_NAME: &str = "tencent-hunyuan-api-key";
+const DOUBAO_ACCOUNT_NAME: &str = "doubao-api-key";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SecureStorageError {
@@ -247,6 +249,68 @@ pub fn save_deepseek_api_key(key: &str) -> Result<DeepSeekStatusView, SecureStor
 }
 pub fn remove_deepseek_api_key() -> Result<DeepSeekStatusView, SecureStorageError> {
     DeepSeekApiKeyService::system().remove()
+}
+
+/// Keychain boundary for the selectable AI providers. Provider names are allow-listed, keys are
+/// never serialized to Tauri, SQLite, or diagnostics.
+fn ai_provider_account_name(provider: &str) -> Result<&'static str, SecureStorageError> {
+    match provider {
+        "DEEPSEEK" => Ok(DEEPSEEK_ACCOUNT_NAME),
+        "TENCENT_HUNYUAN" => Ok(TENCENT_HUNYUAN_ACCOUNT_NAME),
+        "DOUBAO" => Ok(DOUBAO_ACCOUNT_NAME),
+        _ => Err(SecureStorageError::OperationFailed),
+    }
+}
+
+fn ai_provider_entry(provider: &str) -> Result<Entry, SecureStorageError> {
+    Entry::new(SERVICE_NAME, ai_provider_account_name(provider)?)
+        .map_err(|_| SecureStorageError::Unavailable)
+}
+
+pub fn load_ai_provider_api_key_for_adapter(
+    provider: &str,
+) -> Result<Option<String>, SecureStorageError> {
+    match ai_provider_entry(provider)?.get_password() {
+        Ok(key) if !key.trim().is_empty() => Ok(Some(key)),
+        Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => Err(SecureStorageError::OperationFailed),
+    }
+}
+
+pub fn get_ai_provider_key_status(
+    provider: &str,
+) -> Result<DeepSeekStatusView, SecureStorageError> {
+    Ok(DeepSeekStatusView {
+        status: if load_ai_provider_api_key_for_adapter(provider)?.is_some() {
+            "已配置"
+        } else {
+            "未配置"
+        }
+        .into(),
+    })
+}
+
+pub fn save_ai_provider_api_key(
+    provider: &str,
+    key: &str,
+) -> Result<DeepSeekStatusView, SecureStorageError> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err(SecureStorageError::EmptyToken);
+    }
+    ai_provider_entry(provider)?
+        .set_password(key)
+        .map_err(|_| SecureStorageError::OperationFailed)?;
+    get_ai_provider_key_status(provider)
+}
+
+pub fn remove_ai_provider_api_key(
+    provider: &str,
+) -> Result<DeepSeekStatusView, SecureStorageError> {
+    match ai_provider_entry(provider)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => get_ai_provider_key_status(provider),
+        Err(_) => Err(SecureStorageError::OperationFailed),
+    }
 }
 
 #[cfg(test)]
