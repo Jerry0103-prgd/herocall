@@ -4,7 +4,7 @@ export type EventStatus = "CONFIRMED" | "UNCONFIRMED" | "ARCHIVED";
 
 export type CalendarEvent = {
   id: number;
-  eventType: "EARNINGS" | "DIVIDEND" | "EX_DIVIDEND" | "SHAREHOLDER_MEETING" | "MACRO_DATA" | "FED_MEETING";
+  eventType: "EARNINGS" | "DIVIDEND" | "EX_DIVIDEND" | "SHAREHOLDER_MEETING" | "MACRO_DATA" | "FED_MEETING" | "COMPANY_ANNOUNCEMENT" | "MAJOR_MATTER";
   title: string;
   eventTime: string;
   timezone: string;

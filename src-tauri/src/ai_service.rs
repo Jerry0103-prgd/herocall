@@ -18,6 +18,8 @@ use crate::{
     database::service::{
         AiReview, DatabaseError, DatabaseService, NewAiReview, NewAiReviewContext,
     },
+    event_service::{EventService, EventServiceError},
+    news_service::{NewsService, NewsServiceError},
     review_service::{DailyReviewView, ReviewService, ReviewServiceError},
     secure_storage::{get_deepseek_status, load_deepseek_api_key_for_adapter},
 };
@@ -174,6 +176,7 @@ pub enum AiServiceError {
     NotConfigured,
     KeychainUnavailable,
     NoManualSnapshot,
+    Context(String),
 }
 impl fmt::Display for AiServiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -186,6 +189,7 @@ impl fmt::Display for AiServiceError {
             Self::NotConfigured => f.write_str("AI服务未配置"),
             Self::KeychainUnavailable => f.write_str("无法读取系统钥匙串中的 DeepSeek API Key"),
             Self::NoManualSnapshot => f.write_str("请先更新今日市场快照"),
+            Self::Context(message) => write!(f, "AI复盘上下文读取失败：{message}"),
         }
     }
 }
@@ -208,6 +212,16 @@ impl From<AiProviderError> for AiServiceError {
 impl From<serde_json::Error> for AiServiceError {
     fn from(e: serde_json::Error) -> Self {
         Self::Serialization(e)
+    }
+}
+impl From<NewsServiceError> for AiServiceError {
+    fn from(error: NewsServiceError) -> Self {
+        Self::Context(error.to_string())
+    }
+}
+impl From<EventServiceError> for AiServiceError {
+    fn from(error: EventServiceError) -> Self {
+        Self::Context(error.to_string())
     }
 }
 
@@ -254,20 +268,24 @@ impl AiService {
             "indices": index_quotes,
             "snapshotCompletedAt": run.completed_at,
         });
+        let news_items = NewsService::list_for_manual_refresh_run(database, run.id)?;
+        let event_items = EventService::list_for_manual_refresh_run(database, run.id)?;
         let input = AiReviewInput {
             prompt_version: PROMPT_VERSION.into(),
             manual_refresh_run_id: run.id,
             daily_review,
             portfolio,
             market,
-            news: json!({"status":"NO_DATA","items":[]}),
-            events: json!({"status":"NO_DATA","items":[]}),
+            news: json!({"status": if news_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": news_items}),
+            events: json!({"status": if event_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": event_items}),
         };
         ai_diagnostic(format!(
-            "ai_context_generated=true manual_refresh_run_id={} holding_quotes={} index_quotes={}",
+            "ai_context_generated=true manual_refresh_run_id={} holding_quotes={} index_quotes={} news_items={} event_items={}",
             input.manual_refresh_run_id,
             input.market["holdings"].as_array().map_or(0, Vec::len),
             input.market["indices"].as_array().map_or(0, Vec::len),
+            input.news["items"].as_array().map_or(0, Vec::len),
+            input.events["items"].as_array().map_or(0, Vec::len),
         ));
         // Provider and safety validation happen before persistence. Therefore every failure leaves
         // neither an AI review nor a context record behind.
@@ -487,7 +505,7 @@ fn ai_diagnostic(message: impl fmt::Display) {
 mod tests {
     use super::*;
     use crate::{
-        database::service::{NewDailyReview, NewManualRefreshRun},
+        database::service::{NewDailyReview, NewEventRecord, NewManualRefreshRun, NewNewsArticle},
         market_service::{
             DataSourcePriority, MarketDataSource, MarketQuote, MarketSnapshot, MarketStatus,
             SourceClass,
@@ -547,6 +565,36 @@ mod tests {
                 status: "NO_DATA".into(),
             })
             .unwrap();
+        let article = database
+            .create_news_article(NewNewsArticle {
+                title: "已保存公告".into(),
+                source: "测试公开公告源".into(),
+                source_type: "MEDIA".into(),
+                published_at: "2026-08-08T08:00:00.000Z".into(),
+                fetch_time: "2026-08-08T08:01:00.000Z".into(),
+                summary: "公告摘要测试夹具".into(),
+                url: "https://example.invalid/announcement/1".into(),
+                related_security_id: None,
+            })
+            .unwrap();
+        let event = database
+            .create_event(NewEventRecord {
+                event_type: "COMPANY_ANNOUNCEMENT".into(),
+                title: "已保存公司公告事件".into(),
+                security_id: None,
+                event_time: "2026-08-08T08:00:00.000Z".into(),
+                timezone: "Asia/Shanghai".into(),
+                source: "测试公开公告源".into(),
+                source_url: Some("https://example.invalid/announcement/1/event".into()),
+                status: "CONFIRMED".into(),
+            })
+            .unwrap();
+        database
+            .link_news_articles_to_manual_refresh_run(run.id, &[article.id])
+            .unwrap();
+        database
+            .link_events_to_manual_refresh_run(run.id, &[event.id])
+            .unwrap();
         database
             .upsert_daily_review(NewDailyReview {
                 review_date: "2026-08-08".into(),
@@ -584,8 +632,13 @@ mod tests {
         }
         fn generate(&self, input: &AiReviewInput) -> Result<AiReviewSections, AiProviderError> {
             assert_eq!(input.manual_refresh_run_id, 1);
-            assert_eq!(input.news["status"], "NO_DATA");
-            assert_eq!(input.events["status"], "NO_DATA");
+            assert_eq!(input.news["status"], "AVAILABLE");
+            assert_eq!(input.events["status"], "AVAILABLE");
+            assert_eq!(input.news["items"][0]["source"], "测试公开公告源");
+            assert_eq!(
+                input.events["items"][0]["eventType"],
+                "COMPANY_ANNOUNCEMENT"
+            );
             assert_eq!(input.market["indices"].as_array().map(Vec::len), Some(1));
             assert_eq!(input.market["indices"][0]["symbol"], "000001.SH");
             assert_eq!(input.market["indices"][0]["changePercent"], "0.29");

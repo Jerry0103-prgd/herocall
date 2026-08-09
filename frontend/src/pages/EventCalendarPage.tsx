@@ -16,6 +16,8 @@ const typeLabels: Record<CalendarEvent["eventType"], string> = {
   SHAREHOLDER_MEETING: "股东大会",
   MACRO_DATA: "宏观数据",
   FED_MEETING: "美联储会议",
+  COMPANY_ANNOUNCEMENT: "公司公告",
+  MAJOR_MATTER: "重大事项",
 };
 
 export function EventCalendarPage() {

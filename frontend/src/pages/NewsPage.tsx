@@ -44,7 +44,7 @@ export function NewsPage() {
         <article className="news-card" key={article.id}>
           <div className="news-card-heading"><div><span className={`news-source-type news-source-type--${article.sourceType.toLowerCase()}`}>{sourceTypeLabel(article.sourceType)}</span><h2>{article.title}</h2></div><span className="news-related-security">{article.relatedSecurity ?? "未关联证券"}</span></div>
           <p className="news-summary">{article.summary}</p>
-          <footer className="news-meta"><span>来源：{article.source}</span><span>发布时间：{article.publishedAt}</span><a href={article.url} rel="noreferrer" target="_blank">查看原文</a></footer>
+          <footer className="news-meta"><span>来源：{article.source}</span><span>发布时间：{article.publishedAt}</span><span>抓取时间：{article.fetchTime}</span><a href={article.url} rel="noreferrer" target="_blank">查看原文</a></footer>
         </article>
       ))}</div> : null}
     </section>

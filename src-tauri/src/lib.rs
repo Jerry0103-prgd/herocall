@@ -3,6 +3,7 @@
 mod ai_service;
 mod dashboard_service;
 mod database;
+mod disclosure_adapter;
 #[allow(dead_code)]
 // Phase 6-D defines the future Adapter ingestion/CRUD API; calendar UI is read-only.
 mod event_service;

@@ -529,6 +529,20 @@ impl DatabaseService {
         self.get_news_article(self.connection.last_insert_rowid())
     }
 
+    pub fn upsert_news_article(&self, input: NewNewsArticle) -> DatabaseResult<NewsArticle> {
+        let url = input.url.clone();
+        self.connection.execute(
+            "INSERT INTO news_articles (title, source, source_type, published_at, fetch_time, summary, url, related_security_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(url) DO UPDATE SET title=excluded.title, source=excluded.source,
+                source_type=excluded.source_type, published_at=excluded.published_at,
+                fetch_time=excluded.fetch_time, summary=excluded.summary, related_security_id=excluded.related_security_id",
+            params![input.title, input.source, input.source_type, input.published_at, input.fetch_time,
+                input.summary, input.url, input.related_security_id],
+        )?;
+        self.connection.query_row("SELECT id, title, source, source_type, published_at, fetch_time, summary, url, related_security_id, created_at FROM news_articles WHERE url = ?1", [url], Self::map_news_article).map_err(Into::into)
+    }
+
     pub fn upsert_daily_review(&self, input: NewDailyReview) -> DatabaseResult<DailyReview> {
         let review_date = input.review_date.clone();
         self.connection.execute(
@@ -680,6 +694,35 @@ impl DatabaseService {
         self.get_event(self.connection.last_insert_rowid())
     }
 
+    pub fn upsert_event_by_source_url(&self, input: NewEventRecord) -> DatabaseResult<EventRecord> {
+        if let Some(source_url) = input.source_url.as_deref() {
+            let existing: Option<i64> = self
+                .connection
+                .query_row(
+                    "SELECT id FROM events WHERE source = ?1 AND source_url = ?2",
+                    params![&input.source, source_url],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(id) = existing {
+                return self.update_event(
+                    id,
+                    EventRecordUpdate {
+                        event_type: input.event_type,
+                        title: input.title,
+                        security_id: input.security_id,
+                        event_time: input.event_time,
+                        timezone: input.timezone,
+                        source: input.source,
+                        source_url: input.source_url,
+                        status: input.status,
+                    },
+                );
+            }
+        }
+        self.create_event(input)
+    }
+
     pub fn get_event(&self, id: i64) -> DatabaseResult<EventRecord> {
         self.connection
             .query_row(
@@ -780,6 +823,28 @@ impl DatabaseService {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    pub fn link_news_articles_to_manual_refresh_run(
+        &self,
+        run_id: i64,
+        article_ids: &[i64],
+    ) -> DatabaseResult<()> {
+        for article_id in article_ids {
+            self.connection.execute("INSERT OR IGNORE INTO manual_refresh_news_articles (manual_refresh_run_id, news_article_id) VALUES (?1, ?2)", params![run_id, article_id])?;
+        }
+        Ok(())
+    }
+
+    pub fn link_events_to_manual_refresh_run(
+        &self,
+        run_id: i64,
+        event_ids: &[i64],
+    ) -> DatabaseResult<()> {
+        for event_id in event_ids {
+            self.connection.execute("INSERT OR IGNORE INTO manual_refresh_events (manual_refresh_run_id, event_id) VALUES (?1, ?2)", params![run_id, event_id])?;
+        }
+        Ok(())
+    }
+
     pub fn get_daily_review_by_date(&self, review_date: &str) -> DatabaseResult<DailyReview> {
         self.connection
             .query_row(
@@ -853,6 +918,34 @@ impl DatabaseService {
             )
             ",
         )
+    }
+
+    pub fn list_news_articles_for_manual_refresh_run(
+        &self,
+        run_id: i64,
+    ) -> DatabaseResult<Vec<NewsArticleWithSecurity>> {
+        self.list_news_articles_by_scope(&format!("JOIN manual_refresh_news_articles mrna ON mrna.news_article_id = n.id WHERE mrna.manual_refresh_run_id = {run_id}"))
+    }
+
+    pub fn list_events_for_manual_refresh_run(
+        &self,
+        run_id: i64,
+    ) -> DatabaseResult<Vec<EventWithSecurity>> {
+        let mut statement = self.connection.prepare(
+            "SELECT e.id, e.event_type, e.title, e.security_id, e.event_time, e.timezone, e.source, e.source_url, e.status, e.created_at, s.name, s.symbol,
+                    CASE WHEN e.security_id IS NOT NULL AND EXISTS (SELECT 1 FROM holdings h WHERE h.security_id=e.security_id) THEN 1 ELSE 0 END
+             FROM events e JOIN manual_refresh_events mre ON mre.event_id=e.id LEFT JOIN securities s ON s.id=e.security_id
+             WHERE mre.manual_refresh_run_id=?1"
+        )?;
+        let rows = statement.query_map([run_id], |row| {
+            Ok(EventWithSecurity {
+                event: Self::map_event(row)?,
+                security_name: row.get(10)?,
+                security_symbol: row.get(11)?,
+                holding_related: row.get::<_, i64>(12)? == 1,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn list_cash_accounts(&self) -> DatabaseResult<Vec<CashAccount>> {
@@ -1830,15 +1923,16 @@ mod tests {
                     'securities', 'holdings', 'transactions', 'cash_accounts',
                     'market_snapshots', 'market_quotes', 'data_sources', 'news_articles',
                     'daily_reviews', 'ai_reviews', 'events', 'app_settings', 'market_index_quotes',
-                    'manual_refresh_runs', 'ai_review_contexts'
+                    'manual_refresh_runs', 'ai_review_contexts', 'manual_refresh_news_articles',
+                    'manual_refresh_events'
                 )",
                 [],
                 |row| row.get(0),
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 11);
-        assert_eq!(table_count, 15);
+        assert_eq!(migration_count, 12);
+        assert_eq!(table_count, 17);
     }
 
     #[test]
@@ -2050,7 +2144,7 @@ mod tests {
             )
             .expect("verify AI provider column");
 
-        assert_eq!(migration_count, 11);
+        assert_eq!(migration_count, 12);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -2118,7 +2212,7 @@ mod tests {
             })
             .expect("read migration count");
         assert_eq!(quote, ("000001.SH".into(), "1.25".into(), "1.25".into()));
-        assert_eq!(migration_count, 11);
+        assert_eq!(migration_count, 12);
 
         let database = DatabaseService { connection };
         let records = database
@@ -2129,6 +2223,41 @@ mod tests {
         assert_eq!(records[0].change_percent, "1.25");
         assert_eq!(records[0].source, "Legacy index source");
         assert_eq!(records[0].delay_status, "DELAYED");
+    }
+
+    #[test]
+    fn migration_012_preserves_existing_events_and_adds_refresh_links() {
+        let mut connection = Connection::open_in_memory().expect("create pre-012 database");
+        migrations::apply_011_for_upgrade_test(&mut connection).expect("apply through 011");
+        connection.execute(
+            "INSERT INTO events (event_type, title, event_time, timezone, source, source_url, status)
+             VALUES ('EARNINGS', '既有财报公告', '2026-08-08T09:00:00+08:00', 'Asia/Shanghai', '旧来源', 'https://example.invalid/old-event', 'CONFIRMED')",
+            [],
+        ).expect("insert existing event");
+        let event_id = connection.last_insert_rowid();
+
+        migrations::apply(&mut connection).expect("upgrade through 012");
+        migrations::apply(&mut connection).expect("reapply through 012");
+        let event: (String, String, String) = connection
+            .query_row(
+                "SELECT event_type, title, source_url FROM events WHERE id = ?1",
+                [event_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read preserved event");
+        let refresh_link_tables: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('manual_refresh_news_articles', 'manual_refresh_events')",
+            [], |row| row.get(0),
+        ).expect("read refresh link tables");
+        assert_eq!(
+            event,
+            (
+                "EARNINGS".into(),
+                "既有财报公告".into(),
+                "https://example.invalid/old-event".into()
+            )
+        );
+        assert_eq!(refresh_link_tables, 2);
     }
 
     #[test]

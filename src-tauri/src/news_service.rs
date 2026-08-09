@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::database::service::{
     DatabaseError, DatabaseService, NewNewsArticle, NewsArticleUpdate, NewsArticleWithSecurity,
 };
+use crate::disclosure_adapter::DisclosureSecurity;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -63,7 +64,7 @@ pub trait NewsDataAdapter {
     fn source(&self) -> NewsDataSource;
     fn fetch_articles(
         &self,
-        security_ids: &[i64],
+        securities: &[DisclosureSecurity],
     ) -> Result<Vec<NewsArticleInput>, NewsAdapterError>;
 }
 
@@ -173,6 +174,30 @@ impl NewsService {
             return Err(NewsServiceError::MissingArticle);
         }
         Ok(())
+    }
+
+    /// External ingestion is idempotent by the provider's canonical article URL.
+    pub fn ingest(
+        database: &DatabaseService,
+        input: NewsArticleInput,
+    ) -> Result<NewsArticleView, NewsServiceError> {
+        let article = Self::validate_input(database, input)?;
+        let stored = database.upsert_news_article(article)?;
+        Self::list(database)?
+            .into_iter()
+            .find(|view| view.id == stored.id)
+            .ok_or(NewsServiceError::MissingArticle)
+    }
+
+    pub fn list_for_manual_refresh_run(
+        database: &DatabaseService,
+        run_id: i64,
+    ) -> Result<Vec<NewsArticleView>, NewsServiceError> {
+        database
+            .list_news_articles_for_manual_refresh_run(run_id)?
+            .into_iter()
+            .map(Self::view_from_record)
+            .collect()
     }
 
     pub fn list(database: &DatabaseService) -> Result<Vec<NewsArticleView>, NewsServiceError> {
@@ -390,7 +415,7 @@ mod tests {
 
             fn fetch_articles(
                 &self,
-                _security_ids: &[i64],
+                _securities: &[DisclosureSecurity],
             ) -> Result<Vec<NewsArticleInput>, NewsAdapterError> {
                 Ok(Vec::new())
             }

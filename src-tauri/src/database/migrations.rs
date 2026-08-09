@@ -64,6 +64,11 @@ const MIGRATIONS: &[Migration] = &[
         checksum: "market-index-change-percent-011-v1",
         sql: include_str!("../../migrations/011_market_index_change_percent.sql"),
     },
+    Migration {
+        version: "012",
+        checksum: "disclosure-ingestion-012-v1",
+        sql: include_str!("../../migrations/012_disclosure_ingestion.sql"),
+    },
 ];
 
 pub(super) fn apply(connection: &mut Connection) -> DatabaseResult<()> {
@@ -121,4 +126,9 @@ pub(super) fn apply_001_for_upgrade_test(connection: &mut Connection) -> Databas
 #[cfg(test)]
 pub(super) fn apply_010_for_upgrade_test(connection: &mut Connection) -> DatabaseResult<()> {
     apply_migrations(connection, &MIGRATIONS[..10])
+}
+
+#[cfg(test)]
+pub(super) fn apply_011_for_upgrade_test(connection: &mut Connection) -> DatabaseResult<()> {
+    apply_migrations(connection, &MIGRATIONS[..11])
 }

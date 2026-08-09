@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::database::service::{
     DatabaseError, DatabaseService, EventRecordUpdate, EventWithSecurity, NewEventRecord,
 };
+use crate::disclosure_adapter::DisclosureSecurity;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -21,6 +22,8 @@ pub enum EventType {
     ShareholderMeeting,
     MacroData,
     FedMeeting,
+    CompanyAnnouncement,
+    MajorMatter,
 }
 
 impl EventType {
@@ -32,6 +35,8 @@ impl EventType {
             Self::ShareholderMeeting => "SHAREHOLDER_MEETING",
             Self::MacroData => "MACRO_DATA",
             Self::FedMeeting => "FED_MEETING",
+            Self::CompanyAnnouncement => "COMPANY_ANNOUNCEMENT",
+            Self::MajorMatter => "MAJOR_MATTER",
         }
     }
 
@@ -43,6 +48,8 @@ impl EventType {
             "SHAREHOLDER_MEETING" => Ok(Self::ShareholderMeeting),
             "MACRO_DATA" => Ok(Self::MacroData),
             "FED_MEETING" => Ok(Self::FedMeeting),
+            "COMPANY_ANNOUNCEMENT" => Ok(Self::CompanyAnnouncement),
+            "MAJOR_MATTER" => Ok(Self::MajorMatter),
             _ => Err(EventServiceError::Validation("事件类型未确认")),
         }
     }
@@ -95,7 +102,10 @@ pub struct EventInput {
 /// Future official, media, or macro-calendar adapters must return complete source-backed inputs.
 pub trait EventDataAdapter {
     fn source(&self) -> EventSource;
-    fn fetch_events(&self) -> Result<Vec<EventInput>, EventAdapterError>;
+    fn fetch_events(
+        &self,
+        securities: &[DisclosureSecurity],
+    ) -> Result<Vec<EventInput>, EventAdapterError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,6 +215,30 @@ impl EventService {
             return Err(EventServiceError::MissingEvent);
         }
         Ok(())
+    }
+
+    /// Provider events are idempotent by their source URL when present.
+    pub fn ingest(
+        database: &DatabaseService,
+        input: EventInput,
+    ) -> Result<EventView, EventServiceError> {
+        let event = Self::validate_input(database, input)?;
+        let stored = database.upsert_event_by_source_url(event)?;
+        Self::list(database, None)?
+            .into_iter()
+            .find(|view| view.id == stored.id)
+            .ok_or(EventServiceError::MissingEvent)
+    }
+
+    pub fn list_for_manual_refresh_run(
+        database: &DatabaseService,
+        run_id: i64,
+    ) -> Result<Vec<EventView>, EventServiceError> {
+        database
+            .list_events_for_manual_refresh_run(run_id)?
+            .into_iter()
+            .map(Self::view_from_record)
+            .collect()
     }
 
     pub fn list(
@@ -458,13 +492,19 @@ mod tests {
                 }
             }
 
-            fn fetch_events(&self) -> Result<Vec<EventInput>, EventAdapterError> {
+            fn fetch_events(
+                &self,
+                _securities: &[DisclosureSecurity],
+            ) -> Result<Vec<EventInput>, EventAdapterError> {
                 Ok(Vec::new())
             }
         }
 
         let adapter = RecordedAdapter;
         assert_eq!(adapter.source().name, "Recorded event adapter");
-        assert!(adapter.fetch_events().expect("recorded adapter").is_empty());
+        assert!(adapter
+            .fetch_events(&[])
+            .expect("recorded adapter")
+            .is_empty());
     }
 }

@@ -11,10 +11,13 @@ use serde::Serialize;
 
 use crate::{
     database::service::{DatabaseError, DatabaseService, NewManualRefreshRun},
+    disclosure_adapter::{DisclosureSecurity, EastmoneyAnnouncementAdapter},
+    event_service::{EventDataAdapter, EventService},
     market_service::{
         EastmoneyAdapter, MarketDataAdapter, MarketFetchRequest, MarketPhase, MarketSecurity,
         MarketService, MarketSnapshot, MarketStoreError, TencentAdapter, TushareAdapter,
     },
+    news_service::{NewsDataAdapter, NewsService},
     portfolio_ui_service::{PortfolioUiError, PortfolioUiService},
 };
 
@@ -107,6 +110,30 @@ impl MarketRefreshService {
         let index_snapshot = Self::fetch_index_snapshot();
         let indices_snapshot_id = database.save_market_index_snapshot_with_id(&index_snapshot)?;
 
+        let disclosure_securities = holdings
+            .iter()
+            .map(DisclosureSecurity::from)
+            .collect::<Vec<_>>();
+        let disclosure_adapter = EastmoneyAnnouncementAdapter;
+        let (news_inputs, news_issue) =
+            match disclosure_adapter.fetch_articles(&disclosure_securities) {
+                Ok(items) => (items, None),
+                Err(error) => (Vec::new(), Some(error.message)),
+            };
+        let (event_inputs, event_issue) =
+            match disclosure_adapter.fetch_events(&disclosure_securities) {
+                Ok(items) => (items, None),
+                Err(error) => (Vec::new(), Some(error.message)),
+            };
+        let news = news_inputs
+            .into_iter()
+            .filter_map(|input| NewsService::ingest(database, input).ok())
+            .collect::<Vec<_>>();
+        let events = event_inputs
+            .into_iter()
+            .filter_map(|input| EventService::ingest(database, input).ok())
+            .collect::<Vec<_>>();
+
         let holding_configuration = if TushareAdapter::is_configured() {
             "CONFIGURED"
         } else {
@@ -115,15 +142,6 @@ impl MarketRefreshService {
         let holdings_view = Self::to_view(holding_snapshot, holding_configuration);
         let indices_view = Self::section_view(index_snapshot);
 
-        // News/Event Adapter contracts already exist, but no external Adapter is enabled in V1.
-        // The manual snapshot reports this explicitly instead of inventing articles or dates.
-        let no_adapter = |message: &str| SnapshotSectionView {
-            source: "未配置数据源".into(),
-            status: "NO_DATA".into(),
-            item_count: 0,
-            updated_at: None,
-            message: Some(message.into()),
-        };
         let run = database.create_manual_refresh_run(NewManualRefreshRun {
             started_at,
             completed_at: Utc::now().to_rfc3339(),
@@ -137,12 +155,47 @@ impl MarketRefreshService {
             }
             .into(),
         })?;
+        database.link_news_articles_to_manual_refresh_run(
+            run.id,
+            &news.iter().map(|item| item.id).collect::<Vec<_>>(),
+        )?;
+        database.link_events_to_manual_refresh_run(
+            run.id,
+            &events.iter().map(|item| item.id).collect::<Vec<_>>(),
+        )?;
         Ok(ManualMarketSnapshotView {
             run_id: run.id,
             holdings: holdings_view,
             indices: indices_view,
-            news: no_adapter("新闻数据 Adapter 尚未配置；本次未保存新闻。"),
-            events: no_adapter("事件数据 Adapter 尚未配置；本次未保存事件。"),
+            news: SnapshotSectionView {
+                source: "东方财富公告".into(),
+                status: if news.is_empty() {
+                    "NO_DATA".into()
+                } else {
+                    "AVAILABLE".into()
+                },
+                item_count: news.len(),
+                updated_at: news.iter().map(|item| item.fetch_time.clone()).max(),
+                message: news_issue.or_else(|| {
+                    news.is_empty()
+                        .then(|| "未返回与当前持仓关联的公开公告。".into())
+                }),
+            },
+            events: SnapshotSectionView {
+                source: "东方财富公告".into(),
+                status: if events.is_empty() {
+                    "NO_DATA".into()
+                } else {
+                    "AVAILABLE".into()
+                },
+                item_count: events.len(),
+                updated_at: events.iter().map(|item| item.event_time.clone()).max(),
+                message: event_issue.or_else(|| {
+                    events
+                        .is_empty()
+                        .then(|| "未返回与当前持仓关联的公开事件。".into())
+                }),
+            },
         })
     }
 
