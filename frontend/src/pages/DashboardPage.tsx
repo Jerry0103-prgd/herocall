@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { MarketIndexCard } from "../components/MarketIndexCard";
 import { DataStatusCard, type DataStatusTone } from "../components/DataStatusCard";
+import type { PageId } from "../components/Sidebar";
 import { loadDeepSeekStatus, type DeepSeekStatus } from "../services/ai";
 import {
   loadDashboardDataStatus,
@@ -35,7 +36,11 @@ function sectionTone(section: DataSectionStatus): DataStatusTone {
   return section.status === "SYNCED" ? "success" : "empty";
 }
 
-export function DashboardPage() {
+type DashboardPageProps = {
+  onNavigate: (page: PageId) => void;
+};
+
+export function DashboardPage({ onNavigate }: DashboardPageProps) {
   const [indices, setIndices] = useState<MarketIndexQuote[]>(noDataMarketSnapshot);
   const [dataStatus, setDataStatus] = useState<DashboardDataStatus>(noDataStatus);
   const [dataStatusFailed, setDataStatusFailed] = useState(false);
@@ -100,7 +105,7 @@ export function DashboardPage() {
     <section className="page dashboard-page" aria-labelledby="dashboard-title">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Portfolio overview</p>
+          <p className="eyebrow">Research overview</p>
           <h1 id="dashboard-title">今日总览</h1>
           <p>关注标的与市场快照。仅展示可追溯、已验证的数据。</p>
         </div>
@@ -132,6 +137,18 @@ export function DashboardPage() {
           <DataStatusCard title="AI复盘" tone={deepSeekStatusFailed ? "failed" : deepSeekStatus?.status === "已配置" ? "success" : "empty"} headline={deepSeekStatusFailed ? "配置状态读取失败" : deepSeekStatus?.status === "已配置" ? "DeepSeek 已配置" : "未配置"}>
             {!deepSeekStatusFailed ? <div><dt>服务</dt><dd>DeepSeek</dd></div> : null}
           </DataStatusCard>
+        </div>
+      </section>
+
+      <section className="dashboard-quick-links" aria-label="研究快捷入口">
+        <div className="section-heading">
+          <div><p className="section-kicker">研究路径</p><h2>从关注到复盘</h2></div>
+          <span>查看关注标的、关联信息并生成当日复盘</span>
+        </div>
+        <div className="quick-link-grid">
+          <button className="quick-link-card" onClick={() => onNavigate("holdings")} type="button"><span>01</span><strong>我的关注</strong><small>查看当前关注标的</small></button>
+          <button className="quick-link-card" onClick={() => onNavigate("news")} type="button"><span>02</span><strong>财经资讯</strong><small>阅读关联资讯与来源</small></button>
+          <button className="quick-link-card" onClick={() => onNavigate("review")} type="button"><span>03</span><strong>AI复盘</strong><small>生成并查看当日复盘</small></button>
         </div>
       </section>
 

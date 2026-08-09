@@ -112,9 +112,9 @@ export function ReviewPage() {
         <div>
           <p className="eyebrow">Structured daily review</p>
           <h1 id="review-title">仓位复盘</h1>
-          <p>仅汇总本地 Portfolio、市场快照和持仓关联资讯；AI 仅作结构化解释，不提供预测或买卖建议。</p>
+          <p>仅汇总本地关注标的、市场快照和关联资讯；AI 仅作结构化解释，不提供预测或买卖建议。</p>
         </div>
-        <div className="review-actions"><label>复盘日期<input aria-label="复盘日期" onChange={(event) => setReviewDate(event.target.value)} type="date" value={reviewDate} /></label><button className="primary-button review-generate-button" disabled={isGenerating} onClick={() => void generate()} type="button">{isGenerating ? "正在生成…" : "生成AI复盘"}</button></div>
+        <div className="review-actions"><label>复盘日期<input aria-label="复盘日期" onChange={(event) => setReviewDate(event.target.value)} type="date" value={reviewDate} /></label><button className="primary-button review-generate-button" disabled={isGenerating} onClick={() => void generate()} type="button">{isGenerating ? "正在生成…" : "生成当日复盘"}</button></div>
       </header>
 
       {message ? <p className="notice" role="status">{message}</p> : null}
@@ -129,7 +129,7 @@ export function ReviewPage() {
       </div> : null}
 
       <section className="review-section ai-review-section" aria-labelledby="ai-review-title">
-        <div className="section-heading"><div><p className="section-kicker">AI assistance</p><h2 id="ai-review-title">AI复盘</h2></div>{aiStatus?.configured && review ? <button className="secondary-button" disabled={aiGenerationState === "generating"} onClick={() => void generateAi()} type="button">{aiGenerationState === "generating" ? "正在生成…" : "生成AI复盘"}</button> : null}</div>
+        <div className="section-heading"><div><p className="section-kicker">AI assistance</p><h2 id="ai-review-title">AI复盘</h2></div>{aiStatus?.configured && review ? <button className="secondary-button" disabled={aiGenerationState === "generating"} onClick={() => void generateAi()} type="button">{aiGenerationState === "generating" ? "正在生成…" : "重新生成AI分析"}</button> : null}</div>
         <p className="ai-generation-status" role="status">AI生成状态：{aiGenerationState}</p>
         {!aiStatus ? <div className="settings-card ai-empty-state">AI服务状态暂不可用</div> : null}
         {aiStatus && !aiStatus.configured ? <div className="settings-card ai-empty-state">AI服务未配置</div> : null}

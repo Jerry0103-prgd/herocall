@@ -29,7 +29,7 @@ export function PortfolioPage() {
       <header className="page-header">
         <div>
           <p className="eyebrow">Watchlist</p>
-          <h1 id="portfolio-title">关注标的</h1>
+          <h1 id="portfolio-title">我的关注</h1>
           <p>以证券代码和名称记录当前关注标的；不展示账户资产、盈亏或交易指标。</p>
         </div>
       </header>

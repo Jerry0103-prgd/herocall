@@ -14,7 +14,7 @@ import { loadInitializationStatus } from "./services/initialization";
 const pageTitles: Record<Exclude<PageId, "dashboard">, string> = {
   news: "财经资讯",
   review: "仓位复盘",
-  holdings: "我的持仓",
+  holdings: "我的关注",
   calendar: "事件日历",
   settings: "设置",
 };
@@ -34,7 +34,7 @@ function App() {
   return (
     <main className="app-shell">
       <Sidebar activePage={activePage} onNavigate={setActivePage} />
-      {activePage === "dashboard" ? <DashboardPage /> : null}
+      {activePage === "dashboard" ? <DashboardPage onNavigate={setActivePage} /> : null}
       {activePage === "news" ? <NewsPage /> : null}
       {activePage === "review" ? <ReviewPage /> : null}
       {activePage === "holdings" ? <PortfolioPage /> : null}
