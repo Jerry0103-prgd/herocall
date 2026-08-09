@@ -19,7 +19,9 @@ mod secure_storage;
 mod settings_service;
 
 use ai_service::{AiReviewView, AiService, AiServiceStatusView};
-use dashboard_service::{AssetSummaryView, DashboardService, MarketIndexQuoteView};
+use dashboard_service::{
+    AssetSummaryView, DashboardDataStatusView, DashboardService, MarketIndexQuoteView,
+};
 use event_service::{EventService, EventView};
 use initialization_service::{InitializationService, InitializationStatusView};
 use market_refresh_service::{ManualMarketSnapshotView, MarketRefreshService, MarketRefreshView};
@@ -50,6 +52,13 @@ fn get_market_snapshot(app: tauri::AppHandle) -> Result<Vec<MarketIndexQuoteView
     let database = database::service::DatabaseService::open_app_database(&app)
         .map_err(|error| error.to_string())?;
     Ok(DashboardService::load_market_snapshot(&database))
+}
+
+#[tauri::command]
+fn get_dashboard_data_status(app: tauri::AppHandle) -> Result<DashboardDataStatusView, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    DashboardService::load_data_status(&database).map_err(|error| error.to_string())
 }
 
 /// Collects one user-requested market snapshot. This command is never scheduled or kept alive;
@@ -252,6 +261,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_asset_summary,
             get_market_snapshot,
+            get_dashboard_data_status,
             refresh_today_market_snapshot,
             refresh_tushare_market_data,
             get_portfolio_holdings,

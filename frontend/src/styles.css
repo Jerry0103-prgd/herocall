@@ -43,6 +43,23 @@ h2 { margin: 0; font-size: 19px; }
 
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin: 0 0 16px; }
 .section-heading > span { color: #7687a0; font-size: 12px; }
+.data-status-section { margin: 0 0 42px; }
+.data-status-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.data-status-card { min-height: 164px; padding: 19px 20px; border: 1px solid #263650; border-radius: 12px; background: rgb(15 27 45 / 88%); box-shadow: 0 12px 35px rgb(0 0 0 / 12%); }
+.data-status-card > p { margin-bottom: 14px; color: #8798b0; font-size: 13px; }
+.data-status-card > strong { display: flex; align-items: center; gap: 8px; color: #dbe8f4; font-size: 17px; }
+.data-status-card > strong span { display: grid; width: 19px; height: 19px; place-items: center; border: 1px solid #56657a; border-radius: 50%; color: #a9b7ca; font-size: 12px; }
+.data-status-card dl { display: grid; gap: 7px; margin: 17px 0 0; padding-top: 12px; border-top: 1px solid #25344c; }
+.data-status-card dl div { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 8px; }
+.data-status-card dt { color: #71839b; font-size: 11px; }
+.data-status-card dd { overflow: hidden; margin: 0; color: #b9c8d8; font-size: 11px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.data-status-card--success { border-color: #2c5b53; }
+.data-status-card--success > strong, .data-status-card--success > strong span { color: #79e0b9; }
+.data-status-card--success > strong span { border-color: #4cae91; background: #15362f; }
+.data-status-card--empty { border-color: #35445a; }
+.data-status-card--failed { border-color: #744650; }
+.data-status-card--failed > strong, .data-status-card--failed > strong span { color: #f2939e; }
+.data-status-card--failed > strong span { border-color: #bd6573; background: #3d2028; }
 .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .metric-card, .index-card { border: 1px solid #263650; border-radius: 12px; background: rgb(15 27 45 / 88%); box-shadow: 0 12px 35px rgb(0 0 0 / 12%); }
 .metric-card { min-height: 124px; padding: 20px; }
@@ -217,6 +234,7 @@ tbody tr:hover { background: #142138; }
 .first-run-source-status .is-configured { border-color: #4cae91; color: #80e0bc; }
 
 @media (max-width: 1050px) {
+  .data-status-grid { grid-template-columns: 1fr; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .system-status-grid { grid-template-columns: 1fr; }

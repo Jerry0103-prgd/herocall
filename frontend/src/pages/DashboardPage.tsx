@@ -2,13 +2,18 @@ import { useCallback, useEffect, useState } from "react";
 
 import { MarketIndexCard } from "../components/MarketIndexCard";
 import { MetricCard } from "../components/MetricCard";
+import { DataStatusCard, type DataStatusTone } from "../components/DataStatusCard";
+import { loadDeepSeekStatus, type DeepSeekStatus } from "../services/ai";
 import {
   emptyAssetSummary,
   loadAssetSummary,
+  loadDashboardDataStatus,
   loadMarketSnapshot,
   noDataMarketSnapshot,
   refreshTodayMarketSnapshot,
   type AssetSummary,
+  type DashboardDataStatus,
+  type DataSectionStatus,
   type MarketIndexQuote,
 } from "../services/dashboard";
 
@@ -21,19 +26,59 @@ const metrics = [
   ["收益率", "returnRate"],
 ] as const;
 
+const noDataSection: DataSectionStatus = {
+  status: "NO_DATA",
+  source: null,
+  itemCount: 0,
+  updatedAt: null,
+  delayStatus: null,
+};
+
+const noDataStatus: DashboardDataStatus = { market: noDataSection, news: noDataSection };
+
+function formatStatusTime(value: string | null) {
+  if (!value) return "暂无数据";
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) return value;
+  const pad = (number: number) => String(number).padStart(2, "0");
+  return `${timestamp.getFullYear()}-${pad(timestamp.getMonth() + 1)}-${pad(timestamp.getDate())} ${pad(timestamp.getHours())}:${pad(timestamp.getMinutes())}:${pad(timestamp.getSeconds())}`;
+}
+
+function sectionTone(section: DataSectionStatus): DataStatusTone {
+  return section.status === "SYNCED" ? "success" : "empty";
+}
+
 export function DashboardPage() {
   const [summary, setSummary] = useState<AssetSummary>(emptyAssetSummary);
   const [indices, setIndices] = useState<MarketIndexQuote[]>(noDataMarketSnapshot);
+  const [dataStatus, setDataStatus] = useState<DashboardDataStatus>(noDataStatus);
+  const [dataStatusFailed, setDataStatusFailed] = useState(false);
+  const [deepSeekStatus, setDeepSeekStatus] = useState<DeepSeekStatus | null>(null);
+  const [deepSeekStatusFailed, setDeepSeekStatusFailed] = useState(false);
   const [connectionNotice, setConnectionNotice] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const loadDashboard = useCallback(async () => {
-    const [summaryResult, marketResult] = await Promise.allSettled([
+    const [summaryResult, marketResult, dataStatusResult, deepSeekResult] = await Promise.allSettled([
       loadAssetSummary(),
       loadMarketSnapshot(),
+      loadDashboardDataStatus(),
+      loadDeepSeekStatus(),
     ]);
     if (summaryResult.status === "fulfilled") setSummary(summaryResult.value);
     if (marketResult.status === "fulfilled") setIndices(marketResult.value);
+    if (dataStatusResult.status === "fulfilled") {
+      setDataStatus(dataStatusResult.value);
+      setDataStatusFailed(false);
+    } else {
+      setDataStatusFailed(true);
+    }
+    if (deepSeekResult.status === "fulfilled") {
+      setDeepSeekStatus(deepSeekResult.value);
+      setDeepSeekStatusFailed(false);
+    } else {
+      setDeepSeekStatusFailed(true);
+    }
     if (summaryResult.status === "rejected" || marketResult.status === "rejected") {
       setConnectionNotice("本地服务暂未返回可验证数据");
     }
@@ -79,6 +124,32 @@ export function DashboardPage() {
       </header>
 
       {connectionNotice ? <p className="notice" role="status">{connectionNotice}</p> : null}
+
+      <section className="data-status-section" aria-label="数据状态">
+        <div className="section-heading">
+          <div><p className="section-kicker">数据</p><h2>数据状态</h2></div>
+          <span>仅反映最近一次手动更新保存的本地记录</span>
+        </div>
+        <div className="data-status-grid">
+          <DataStatusCard title="行情" tone={dataStatusFailed ? "failed" : sectionTone(dataStatus.market)} headline={dataStatusFailed ? "状态读取失败" : dataStatus.market.status === "SYNCED" ? "已同步" : "暂无行情数据"}>
+            {!dataStatusFailed && dataStatus.market.status === "SYNCED" ? <>
+              <div><dt>来源</dt><dd>{dataStatus.market.source}</dd></div>
+              <div><dt>更新时间</dt><dd>{formatStatusTime(dataStatus.market.updatedAt)}</dd></div>
+              <div><dt>行情状态</dt><dd>{dataStatus.market.delayStatus ?? "未确认"}</dd></div>
+            </> : null}
+          </DataStatusCard>
+          <DataStatusCard title="资讯" tone={dataStatusFailed ? "failed" : sectionTone(dataStatus.news)} headline={dataStatusFailed ? "状态读取失败" : dataStatus.news.status === "SYNCED" ? "已同步" : "暂无关联资讯"}>
+            {!dataStatusFailed && dataStatus.news.status === "SYNCED" ? <>
+              <div><dt>来源</dt><dd>{dataStatus.news.source}</dd></div>
+              <div><dt>数量</dt><dd>{dataStatus.news.itemCount} 条</dd></div>
+              <div><dt>更新时间</dt><dd>{formatStatusTime(dataStatus.news.updatedAt)}</dd></div>
+            </> : null}
+          </DataStatusCard>
+          <DataStatusCard title="AI复盘" tone={deepSeekStatusFailed ? "failed" : deepSeekStatus?.status === "已配置" ? "success" : "empty"} headline={deepSeekStatusFailed ? "配置状态读取失败" : deepSeekStatus?.status === "已配置" ? "DeepSeek 已配置" : "未配置"}>
+            {!deepSeekStatusFailed ? <div><dt>服务</dt><dd>DeepSeek</dd></div> : null}
+          </DataStatusCard>
+        </div>
+      </section>
 
       <section aria-label="资产摘要">
         <div className="section-heading">

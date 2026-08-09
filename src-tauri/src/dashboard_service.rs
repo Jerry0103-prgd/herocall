@@ -4,13 +4,14 @@
 //! and source-backed Market Service quotes. If an input is incomplete, the corresponding field is
 //! `None` so the UI renders “暂无数据” instead of substituting a financial value.
 
-use std::{error::Error, fmt, str::FromStr};
+use std::{collections::BTreeSet, error::Error, fmt, str::FromStr};
 
 use rust_decimal::Decimal;
 use serde::Serialize;
 
 use crate::{
     database::service::{DatabaseError, DatabaseService},
+    news_service::{NewsService, NewsServiceError},
     portfolio_ui_service::{PortfolioUiError, PortfolioUiService},
 };
 
@@ -39,9 +40,29 @@ pub struct MarketIndexQuoteView {
     pub updated_at: Option<String>,
 }
 
+/// A read-only overview of the data bound to the most recent manual collection.
+/// `SYNCED` means records were persisted from that collection; it never implies real-time data.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardDataStatusView {
+    pub market: DataSectionStatusView,
+    pub news: DataSectionStatusView,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataSectionStatusView {
+    pub status: String,
+    pub source: Option<String>,
+    pub item_count: usize,
+    pub updated_at: Option<String>,
+    pub delay_status: Option<String>,
+}
+
 #[derive(Debug)]
 pub enum DashboardError {
     Database(DatabaseError),
+    News(NewsServiceError),
     Portfolio(PortfolioUiError),
 }
 
@@ -49,6 +70,7 @@ impl fmt::Display for DashboardError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Database(error) => write!(formatter, "database error: {error}"),
+            Self::News(error) => write!(formatter, "news error: {error}"),
             Self::Portfolio(error) => write!(formatter, "portfolio error: {error}"),
         }
     }
@@ -65,6 +87,12 @@ impl From<DatabaseError> for DashboardError {
 impl From<PortfolioUiError> for DashboardError {
     fn from(error: PortfolioUiError) -> Self {
         Self::Portfolio(error)
+    }
+}
+
+impl From<NewsServiceError> for DashboardError {
+    fn from(error: NewsServiceError) -> Self {
+        Self::News(error)
     }
 }
 
@@ -204,6 +232,74 @@ impl DashboardService {
         })
         .collect()
     }
+
+    pub fn load_data_status(
+        database: &DatabaseService,
+    ) -> Result<DashboardDataStatusView, DashboardError> {
+        let Some(run) = database.latest_manual_refresh_run()? else {
+            return Ok(DashboardDataStatusView {
+                market: DataSectionStatusView::no_data(),
+                news: DataSectionStatusView::no_data(),
+            });
+        };
+        let market_quotes =
+            database.list_market_index_quotes_for_snapshot(run.indices_snapshot_id)?;
+        let news_articles = NewsService::list_for_manual_refresh_run(database, run.id)?;
+        Ok(DashboardDataStatusView {
+            market: DataSectionStatusView::from_records(market_quotes.iter().map(|quote| {
+                (
+                    quote.source.as_str(),
+                    quote.fetched_at.as_str(),
+                    quote.delay_status.as_str(),
+                )
+            })),
+            news: DataSectionStatusView::from_records(
+                news_articles
+                    .iter()
+                    .map(|article| (article.source.as_str(), article.fetch_time.as_str(), "")),
+            ),
+        })
+    }
+}
+
+impl DataSectionStatusView {
+    fn no_data() -> Self {
+        Self {
+            status: "NO_DATA".into(),
+            source: None,
+            item_count: 0,
+            updated_at: None,
+            delay_status: None,
+        }
+    }
+
+    fn from_records<'a>(records: impl Iterator<Item = (&'a str, &'a str, &'a str)>) -> Self {
+        let records = records.collect::<Vec<_>>();
+        if records.is_empty() {
+            return Self::no_data();
+        }
+        let sources = records
+            .iter()
+            .map(|(source, _, _)| (*source).to_owned())
+            .collect::<BTreeSet<_>>();
+        let delay_statuses = records
+            .iter()
+            .map(|(_, _, delay_status)| *delay_status)
+            .filter(|delay_status| !delay_status.is_empty())
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        Self {
+            status: "SYNCED".into(),
+            source: Some(sources.into_iter().collect::<Vec<_>>().join(" / ")),
+            item_count: records.len(),
+            updated_at: records
+                .iter()
+                .map(|(_, updated_at, _)| (*updated_at).to_owned())
+                .max(),
+            delay_status: (!delay_statuses.is_empty())
+                .then(|| delay_statuses.into_iter().collect::<Vec<_>>().join(" / ")),
+        }
+    }
 }
 
 fn sum_decimals<'a>(values: impl Iterator<Item = &'a str>) -> Option<Decimal> {
@@ -237,7 +333,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        database::service::{NewCashAccount, NewHolding, NewSecurity},
+        database::service::{
+            NewCashAccount, NewHolding, NewManualRefreshRun, NewNewsArticle, NewSecurity,
+        },
         market_service::{
             DataSourcePriority, MarketDataSource, MarketQuote, MarketSnapshot, MarketSnapshotStore,
             MarketStatus, SourceClass,
@@ -395,5 +493,92 @@ mod tests {
         assert_eq!(indices[0].source.as_deref(), Some("Recorded index source"));
         assert_eq!(indices[0].status, "DELAYED");
         assert_eq!(indices[1].status, "NO_DATA");
+    }
+
+    #[test]
+    fn data_status_uses_only_the_latest_manual_refresh_records() {
+        let database = DatabaseService::open_in_memory().expect("initialize database");
+        let empty = DashboardService::load_data_status(&database).expect("read empty status");
+        assert_eq!(empty.market.status, "NO_DATA");
+        assert_eq!(empty.news.status, "NO_DATA");
+
+        let timestamp = Utc.with_ymd_and_hms(2026, 8, 9, 5, 0, 0).unwrap();
+        let index_snapshot_id = database
+            .save_market_index_snapshot_with_id(&MarketSnapshot {
+                source: MarketDataSource {
+                    name: "Recorded public index source".into(),
+                    base_url: "https://test.invalid/index".into(),
+                    priority: DataSourcePriority::PublicQuote,
+                    source_class: SourceClass::PublicQuote,
+                },
+                market_timestamp: Some(timestamp),
+                fetched_at: timestamp,
+                delay_status: MarketStatus::Delayed,
+                quotes: vec![MarketQuote {
+                    security_id: -1,
+                    symbol: "000001.SH".into(),
+                    name: "上证指数".into(),
+                    market: "SSE".into(),
+                    current_price: decimal("3200"),
+                    previous_close: decimal("3190"),
+                    price_change: decimal("10"),
+                    change_percent: decimal("0.3135"),
+                    volume: decimal("0"),
+                    volume_unit: "SOURCE_DECLARED".into(),
+                    turnover_amount: decimal("0"),
+                    turnover_unit: "SOURCE_DECLARED".into(),
+                    market_timestamp: timestamp,
+                    fetched_at: timestamp,
+                    source: "Recorded public index source".into(),
+                    delay_status: MarketStatus::Delayed,
+                }],
+                unavailable_reason: None,
+            })
+            .expect("save index snapshot")
+            .expect("index snapshot id");
+        let run = database
+            .create_manual_refresh_run(NewManualRefreshRun {
+                started_at: "2026-08-09T05:00:00Z".into(),
+                completed_at: "2026-08-09T05:00:01Z".into(),
+                holdings_snapshot_id: None,
+                indices_snapshot_id: Some(index_snapshot_id),
+                portfolio_json: "[]".into(),
+                status: "COMPLETED".into(),
+            })
+            .expect("create refresh run");
+        let article = database
+            .create_news_article(NewNewsArticle {
+                title: "已保存公告夹具".into(),
+                source: "Recorded announcement source".into(),
+                source_type: "MEDIA".into(),
+                published_at: "2026-08-09T04:00:00.000Z".into(),
+                fetch_time: "2026-08-09T05:00:02.000Z".into(),
+                summary: "来源可追溯的测试夹具。".into(),
+                url: "https://example.invalid/announcement".into(),
+                related_security_id: None,
+            })
+            .expect("create saved announcement");
+        database
+            .link_news_articles_to_manual_refresh_run(run.id, &[article.id])
+            .expect("link announcement to refresh run");
+
+        let status = DashboardService::load_data_status(&database).expect("read saved status");
+        assert_eq!(status.market.status, "SYNCED");
+        assert_eq!(
+            status.market.source.as_deref(),
+            Some("Recorded public index source")
+        );
+        assert_eq!(status.market.item_count, 1);
+        assert_eq!(status.market.delay_status.as_deref(), Some("DELAYED"));
+        assert_eq!(status.news.status, "SYNCED");
+        assert_eq!(
+            status.news.source.as_deref(),
+            Some("Recorded announcement source")
+        );
+        assert_eq!(status.news.item_count, 1);
+        assert_eq!(
+            status.news.updated_at.as_deref(),
+            Some("2026-08-09T05:00:02.000Z")
+        );
     }
 }

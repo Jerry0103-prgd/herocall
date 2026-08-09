@@ -36,6 +36,19 @@ export type ManualMarketSnapshot = {
   events: SnapshotSection;
 };
 
+export type DataSectionStatus = {
+  status: "SYNCED" | "NO_DATA";
+  source: string | null;
+  itemCount: number;
+  updatedAt: string | null;
+  delayStatus: string | null;
+};
+
+export type DashboardDataStatus = {
+  market: DataSectionStatus;
+  news: DataSectionStatus;
+};
+
 export type MarketIndexQuote = {
   name: string;
   symbol: string;
@@ -82,6 +95,10 @@ export function loadAssetSummary(): Promise<AssetSummary> {
 
 export function loadMarketSnapshot(): Promise<MarketIndexQuote[]> {
   return invoke<MarketIndexQuote[]>("get_market_snapshot");
+}
+
+export function loadDashboardDataStatus(): Promise<DashboardDataStatus> {
+  return invoke<DashboardDataStatus>("get_dashboard_data_status");
 }
 
 export function refreshTushareMarketData(): Promise<MarketRefresh> {
