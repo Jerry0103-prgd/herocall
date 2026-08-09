@@ -7,6 +7,18 @@ type ReleaseNote = {
 
 const releaseNotes: ReleaseNote[] = [
   {
+    version: "V1.0.5",
+    date: "2026-08-09",
+    summary: "指数收盘观察与 AI复盘信息密度优化",
+    groups: [
+      { title: "更新", items: [
+        "指数卡展示最近交易日、近5日与近10日真实收盘观察",
+        "AI复盘显示当前实际启用的 Provider",
+        "隐藏历史综合复盘入口，聚焦关注标的分析",
+      ] },
+    ],
+  },
+  {
     version: "V1.0.4",
     date: "2026-08-09",
     summary: "AI复盘中心与多 Provider 支持",

@@ -6,6 +6,7 @@
 
 use std::{collections::BTreeSet, error::Error, fmt, str::FromStr};
 
+use chrono::{DateTime, FixedOffset, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
 
@@ -33,11 +34,22 @@ pub struct AssetSummaryView {
 pub struct MarketIndexQuoteView {
     pub name: String,
     pub symbol: String,
+    pub last_close: IndexMetricView,
+    pub five_day_average: IndexMetricView,
+    pub ten_day_average: IndexMetricView,
+    // Retained for the non-AI daily-review schema, which reads the same latest saved close.
     pub current_price: Option<String>,
     pub change_percent: Option<String>,
     pub source: Option<String>,
     pub status: String,
     pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexMetricView {
+    pub price: Option<String>,
+    pub change_percent: Option<String>,
 }
 
 /// A read-only overview of the data bound to the most recent manual collection.
@@ -197,12 +209,13 @@ impl DashboardService {
     /// Returns only persisted, source-backed index records. Missing records stay `NO_DATA`;
     /// identity labels are presentation metadata, never financial values.
     pub fn load_market_snapshot(database: &DatabaseService) -> Vec<MarketIndexQuoteView> {
-        let persisted = database
-            .latest_market_index_quotes()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|record| (record.symbol.clone(), record))
-            .collect::<std::collections::HashMap<_, _>>();
+        Self::load_market_snapshot_as_of(database, shanghai_today())
+    }
+
+    fn load_market_snapshot_as_of(
+        database: &DatabaseService,
+        today: NaiveDate,
+    ) -> Vec<MarketIndexQuoteView> {
         [
             ("上证指数", "000001.SH"),
             ("深证成指", "399001.SZ"),
@@ -210,25 +223,47 @@ impl DashboardService {
             ("科创50", "000688.SH"),
         ]
         .into_iter()
-        .map(|(name, symbol)| match persisted.get(symbol) {
-            Some(record) => MarketIndexQuoteView {
-                name: record.name.clone(),
-                symbol: record.symbol.clone(),
-                current_price: Some(record.current_price.clone()),
-                change_percent: record.change_percent.clone(),
-                source: Some(record.source.clone()),
-                status: record.status.clone(),
-                updated_at: Some(record.updated_at.clone()),
-            },
-            None => MarketIndexQuoteView {
-                name: name.into(),
-                symbol: symbol.into(),
-                current_price: None,
-                change_percent: None,
-                source: None,
-                status: "NO_DATA".into(),
-                updated_at: None,
-            },
+        .map(|(name, symbol)| {
+            let history = database
+                .recent_market_index_quotes_by_trading_day(symbol, 20)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|record| {
+                    market_date(&record.market_timestamp).is_some_and(|date| date < today)
+                })
+                .collect::<Vec<_>>();
+            match history.first() {
+                Some(latest) => {
+                    let last_close = IndexMetricView {
+                        price: Some(latest.current_price.clone()),
+                        change_percent: latest.change_percent.clone(),
+                    };
+                    MarketIndexQuoteView {
+                        name: latest.name.clone(),
+                        symbol: latest.symbol.clone(),
+                        five_day_average: average_close_metric(&history, 5),
+                        ten_day_average: average_close_metric(&history, 10),
+                        current_price: last_close.price.clone(),
+                        change_percent: last_close.change_percent.clone(),
+                        last_close,
+                        source: Some(latest.source.clone()),
+                        status: latest.status.clone(),
+                        updated_at: Some(latest.fetched_at.clone()),
+                    }
+                }
+                None => MarketIndexQuoteView {
+                    name: name.into(),
+                    symbol: symbol.into(),
+                    last_close: IndexMetricView::no_data(),
+                    five_day_average: IndexMetricView::no_data(),
+                    ten_day_average: IndexMetricView::no_data(),
+                    current_price: None,
+                    change_percent: None,
+                    source: None,
+                    status: "NO_DATA".into(),
+                    updated_at: None,
+                },
+            }
         })
         .collect()
     }
@@ -259,6 +294,63 @@ impl DashboardService {
                     .map(|article| (article.source.as_str(), article.fetch_time.as_str(), "")),
             ),
         })
+    }
+}
+
+impl IndexMetricView {
+    fn no_data() -> Self {
+        Self {
+            price: None,
+            change_percent: None,
+        }
+    }
+}
+
+fn shanghai_today() -> NaiveDate {
+    Utc::now()
+        .with_timezone(&FixedOffset::east_opt(8 * 60 * 60).expect("valid China offset"))
+        .date_naive()
+}
+
+fn market_date(value: &str) -> Option<NaiveDate> {
+    DateTime::parse_from_rfc3339(value).ok().map(|timestamp| {
+        timestamp
+            .with_timezone(&FixedOffset::east_opt(8 * 60 * 60).expect("valid China offset"))
+            .date_naive()
+    })
+}
+
+/// The 5/10-day percentages express the latest verified close relative to that period's real
+/// persisted average. An incomplete, unparsable, or insufficient history remains `暂无数据`.
+fn average_close_metric(
+    history: &[crate::database::service::HistoricalMarketIndexQuoteRecord],
+    period: usize,
+) -> IndexMetricView {
+    let Some(records) = history.get(..period) else {
+        return IndexMetricView::no_data();
+    };
+    let Some(latest_close) = records
+        .first()
+        .and_then(|record| Decimal::from_str(&record.current_price).ok())
+    else {
+        return IndexMetricView::no_data();
+    };
+    let Some(total) = records
+        .iter()
+        .map(|record| Decimal::from_str(&record.current_price).ok())
+        .collect::<Option<Vec<_>>>()
+        .map(|prices| prices.into_iter().sum::<Decimal>())
+    else {
+        return IndexMetricView::no_data();
+    };
+    let average = total / Decimal::from(period as u32);
+    if average.is_zero() {
+        return IndexMetricView::no_data();
+    }
+    let change_percent = (latest_close - average) * Decimal::new(100, 0) / average;
+    IndexMetricView {
+        price: Some(decimal_to_string(average.round_dp(2))),
+        change_percent: Some(decimal_to_string(change_percent.round_dp(2))),
     }
 }
 
@@ -437,7 +529,10 @@ mod tests {
     fn dashboard_never_substitutes_missing_financial_values_with_zero() {
         let database = DatabaseService::open_in_memory().expect("initialize database");
         let summary = DashboardService::load_asset_summary(&database).expect("read empty summary");
-        let indices = DashboardService::load_market_snapshot(&database);
+        let indices = DashboardService::load_market_snapshot_as_of(
+            &database,
+            NaiveDate::from_ymd_opt(2026, 8, 11).unwrap(),
+        );
 
         assert_eq!(summary.total_assets, None);
         assert_eq!(summary.stock_market_value, None);
@@ -488,11 +583,109 @@ mod tests {
             })
             .expect("persist index snapshot");
 
-        let indices = DashboardService::load_market_snapshot(&database);
+        let indices = DashboardService::load_market_snapshot_as_of(
+            &database,
+            NaiveDate::from_ymd_opt(2026, 8, 11).unwrap(),
+        );
         assert_eq!(indices[0].current_price.as_deref(), Some("3200"));
         assert_eq!(indices[0].source.as_deref(), Some("Recorded index source"));
         assert_eq!(indices[0].status, "DELAYED");
         assert_eq!(indices[1].status, "NO_DATA");
+    }
+
+    #[test]
+    fn dashboard_uses_distinct_real_market_dates_for_close_averages() {
+        let database = DatabaseService::open_in_memory().expect("initialize database");
+        let source = MarketDataSource {
+            name: "Recorded end-of-day index source".into(),
+            base_url: "https://test.invalid/index".into(),
+            priority: DataSourcePriority::PrimaryApi,
+            source_class: SourceClass::EndOfDay,
+        };
+
+        for day in 1..=10 {
+            let timestamp = Utc.with_ymd_and_hms(2026, 8, day, 8, 0, 0).unwrap();
+            let close = Decimal::from(100 + day);
+            database
+                .save_market_index_snapshot(&MarketSnapshot {
+                    source: source.clone(),
+                    market_timestamp: Some(timestamp),
+                    fetched_at: timestamp,
+                    delay_status: MarketStatus::Closed,
+                    quotes: vec![MarketQuote {
+                        security_id: -1,
+                        symbol: "000001.SH".into(),
+                        name: "上证指数".into(),
+                        market: "SSE".into(),
+                        current_price: close,
+                        previous_close: close - Decimal::ONE,
+                        price_change: Decimal::ONE,
+                        change_percent: decimal("1.02"),
+                        volume: Decimal::ZERO,
+                        volume_unit: "SOURCE_DECLARED".into(),
+                        turnover_amount: Decimal::ZERO,
+                        turnover_unit: "SOURCE_DECLARED".into(),
+                        market_timestamp: timestamp,
+                        fetched_at: timestamp,
+                        source: source.name.clone(),
+                        delay_status: MarketStatus::Closed,
+                    }],
+                    unavailable_reason: None,
+                })
+                .expect("save a real recorded close");
+        }
+        let refreshed_timestamp = Utc.with_ymd_and_hms(2026, 8, 10, 9, 0, 0).unwrap();
+        database
+            .save_market_index_snapshot(&MarketSnapshot {
+                source: source.clone(),
+                market_timestamp: Some(refreshed_timestamp),
+                fetched_at: refreshed_timestamp,
+                delay_status: MarketStatus::Closed,
+                quotes: vec![MarketQuote {
+                    security_id: -1,
+                    symbol: "000001.SH".into(),
+                    name: "上证指数".into(),
+                    market: "SSE".into(),
+                    current_price: decimal("120"),
+                    previous_close: decimal("119"),
+                    price_change: Decimal::ONE,
+                    change_percent: decimal("0.84"),
+                    volume: Decimal::ZERO,
+                    volume_unit: "SOURCE_DECLARED".into(),
+                    turnover_amount: Decimal::ZERO,
+                    turnover_unit: "SOURCE_DECLARED".into(),
+                    market_timestamp: refreshed_timestamp,
+                    fetched_at: refreshed_timestamp,
+                    source: source.name.clone(),
+                    delay_status: MarketStatus::Closed,
+                }],
+                unavailable_reason: None,
+            })
+            .expect("save a later same-day close record");
+
+        let indices = DashboardService::load_market_snapshot_as_of(
+            &database,
+            NaiveDate::from_ymd_opt(2026, 8, 11).unwrap(),
+        );
+        let shanghai = &indices[0];
+        assert_eq!(shanghai.last_close.price.as_deref(), Some("120"));
+        assert_eq!(shanghai.last_close.change_percent.as_deref(), Some("0.84"));
+        assert_eq!(shanghai.five_day_average.price.as_deref(), Some("110"));
+        assert_eq!(
+            shanghai.five_day_average.change_percent.as_deref(),
+            Some("9.09")
+        );
+        assert_eq!(shanghai.ten_day_average.price.as_deref(), Some("106.5"));
+        assert_eq!(
+            shanghai.ten_day_average.change_percent.as_deref(),
+            Some("12.68")
+        );
+        assert_eq!(
+            shanghai.source.as_deref(),
+            Some("Recorded end-of-day index source")
+        );
+        assert_eq!(shanghai.status, "CLOSED");
+        assert_eq!(indices[1].five_day_average.price, None);
     }
 
     #[test]

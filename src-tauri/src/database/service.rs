@@ -113,6 +113,20 @@ pub struct MarketIndexQuoteRecord {
     pub updated_at: String,
 }
 
+/// One source-backed index close selected from a distinct persisted market date. This is an
+/// infrastructure record; period calculations remain in the Dashboard service.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalMarketIndexQuoteRecord {
+    pub name: String,
+    pub symbol: String,
+    pub current_price: String,
+    pub change_percent: Option<String>,
+    pub source: String,
+    pub status: String,
+    pub market_timestamp: String,
+    pub fetched_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManualRefreshRun {
     pub id: i64,
@@ -1311,6 +1325,51 @@ impl DatabaseService {
                 source: row.get(4)?,
                 status: row.get(5)?,
                 updated_at: row.get(6)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Returns at most one real persisted quote per market date, newest first. Multiple manual
+    /// refreshes during the same market date never inflate a multi-day average.
+    pub fn recent_market_index_quotes_by_trading_day(
+        &self,
+        symbol: &str,
+        limit: usize,
+    ) -> DatabaseResult<Vec<HistoricalMarketIndexQuoteRecord>> {
+        let mut statement = self.connection.prepare(
+            "
+            WITH ranked AS (
+                SELECT miq.name, miq.symbol, miq.current_price,
+                       COALESCE(miq.change_percent, miq.change_pct) AS change_percent,
+                       ds.name AS source, miq.delay_status, miq.market_timestamp, miq.fetched_at,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY date(miq.market_timestamp, '+8 hours')
+                           ORDER BY miq.market_timestamp DESC, miq.fetched_at DESC, miq.id DESC
+                       ) AS day_rank
+                FROM market_index_quotes miq
+                JOIN market_snapshots ms ON ms.id = miq.market_snapshot_id
+                JOIN data_sources ds ON ds.id = ms.data_source_id
+                WHERE miq.symbol = ?1 AND trim(miq.current_price) <> ''
+            )
+            SELECT name, symbol, current_price, change_percent, source, delay_status,
+                   market_timestamp, fetched_at
+            FROM ranked
+            WHERE day_rank = 1
+            ORDER BY market_timestamp DESC, fetched_at DESC
+            LIMIT ?2
+            ",
+        )?;
+        let rows = statement.query_map(params![symbol, limit as i64], |row| {
+            Ok(HistoricalMarketIndexQuoteRecord {
+                name: row.get(0)?,
+                symbol: row.get(1)?,
+                current_price: row.get(2)?,
+                change_percent: row.get(3)?,
+                source: row.get(4)?,
+                status: row.get(5)?,
+                market_timestamp: row.get(6)?,
+                fetched_at: row.get(7)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)

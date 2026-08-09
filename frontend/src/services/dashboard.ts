@@ -52,11 +52,19 @@ export type DashboardDataStatus = {
 export type MarketIndexQuote = {
   name: string;
   symbol: string;
+  lastClose: IndexMetric;
+  fiveDayAverage: IndexMetric;
+  tenDayAverage: IndexMetric;
   currentPrice: string | null;
   changePercent: string | null;
   source: string | null;
   status: "REALTIME" | "DELAYED" | "CLOSED" | "NO_DATA";
   updatedAt: string | null;
+};
+
+export type IndexMetric = {
+  price: string | null;
+  changePercent: string | null;
 };
 
 const noDataIndices: MarketIndexQuote[] = [
@@ -67,6 +75,9 @@ const noDataIndices: MarketIndexQuote[] = [
 ].map(([name, symbol]) => ({
   name,
   symbol,
+  lastClose: { price: null, changePercent: null },
+  fiveDayAverage: { price: null, changePercent: null },
+  tenDayAverage: { price: null, changePercent: null },
   currentPrice: null,
   changePercent: null,
   source: null,

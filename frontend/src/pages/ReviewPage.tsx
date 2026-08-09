@@ -35,16 +35,14 @@ function safeErrorMessage(error: unknown) {
 }
 
 function ReportTable({ review }: { review: AiReview }) {
-  const title = review.securityName
-    ? `${review.securityName}${review.securitySymbol ? ` · ${review.securitySymbol}` : ""}`
-    : "历史综合复盘";
+  const title = `${review.securityName ?? "未确认标的"}${review.securitySymbol ? ` · ${review.securitySymbol}` : ""}`;
   return (
     <article className="ai-report-wrap">
       <div className="ai-report-heading">
         <div><p className="section-kicker">{review.model}</p><h3>{title}</h3></div>
         <span>仅供信息整理与观察，不构成交易建议。</span>
       </div>
-      <div className="ai-report-table-scroll"><table className="ai-report-table"><thead><tr><th>分析维度</th><th>AI复盘结果</th></tr></thead><tbody>{review.report ? reportLabels.map(([label, key]) => <tr key={key}><th scope="row">{label}</th><td>{review.report?.[key] ?? "暂无数据"}</td></tr>) : <><tr><th scope="row">历史事实</th><td>{review.facts.join("\n")}</td></tr><tr><th scope="row">历史分析</th><td>{review.inferences.join("\n")}</td></tr><tr><th scope="row">历史风险</th><td>{review.risks.join("\n")}</td></tr></>}</tbody></table></div>
+      <div className="ai-report-table-scroll"><table className="ai-report-table"><thead><tr><th>分析维度</th><th>AI复盘结果</th></tr></thead><tbody>{reportLabels.map(([label, key]) => <tr key={key}><th scope="row">{label}</th><td>{review.report?.[key] ?? "暂无数据"}</td></tr>)}</tbody></table></div>
       <details className="ai-audit-details"><summary>查看 FACTS / INFERENCES / RISKS 审计依据</summary><div className="ai-audit-grid"><section><strong>FACTS</strong><ul>{review.facts.map((item) => <li key={item}>{item}</li>)}</ul></section><section><strong>INFERENCES</strong><ul>{review.inferences.map((item) => <li key={item}>{item}</li>)}</ul></section><section><strong>RISKS</strong><ul>{review.risks.map((item) => <li key={item}>{item}</li>)}</ul></section></div></details>
     </article>
   );
@@ -65,9 +63,10 @@ export function ReviewPage() {
         loadAiReviewsForDate(date).catch(() => []),
         loadAiProviderConfigs(),
       ]);
-      setReviews(stored);
+      const followedSecurityReviews = stored.filter((review) => review.securityId !== null);
+      setReviews(followedSecurityReviews);
       setProviders(configuredProviders);
-      setState(stored.length > 0 ? "success" : "idle");
+      setState(followedSecurityReviews.length > 0 ? "success" : "idle");
       setMessage(null);
     } catch (error) {
       setMessage(safeErrorMessage(error));
@@ -83,7 +82,7 @@ export function ReviewPage() {
     setMessage(null);
     try {
       const generated = await generateAiReviews(reviewDate);
-      setReviews(generated);
+      setReviews(generated.filter((review) => review.securityId !== null));
       setState("success");
       setMessage(`已生成 ${generated.length} 只关注标的的 AI复盘`);
     } catch (error) {
@@ -106,6 +105,7 @@ export function ReviewPage() {
       </header>
 
       {message ? <p className="notice" role="status">{message}</p> : null}
+      {!isLoading ? <div className="ai-active-provider" aria-label="当前AI模型"><span>当前模型</span><strong>{selectedProvider ? selectedProvider.displayName : "暂无已启用模型"}</strong>{selectedProvider ? <small>{selectedProvider.model}</small> : null}</div> : null}
       {!selectedProvider && !isLoading ? <div className="settings-card ai-empty-state">请先在设置中配置并开启一个 AI Provider。</div> : null}
       {isLoading ? <p className="table-state review-state">正在读取已保存的 AI复盘…</p> : null}
       {!isLoading && selectedProvider && reviews.length === 0 ? <div className="settings-card ai-empty-state">尚未生成当日 AI复盘。请先更新今日市场快照，再点击“生成AI复盘”。</div> : null}

@@ -1,4 +1,4 @@
-import type { MarketIndexQuote } from "../services/dashboard";
+import type { IndexMetric, MarketIndexQuote } from "../services/dashboard";
 
 type MarketIndexCardProps = {
   quote: MarketIndexQuote;
@@ -15,6 +15,19 @@ function changeTone(value: string | null) {
   const numericValue = Number.parseFloat(value?.replace("%", "") ?? "");
   if (!Number.isFinite(numericValue) || numericValue === 0) return "flat";
   return numericValue > 0 ? "up" : "down";
+}
+
+function IndexMetricRow({ label, metric }: { label: string; metric: IndexMetric }) {
+  const tone = changeTone(metric.changePercent);
+  return (
+    <div className="index-metric-row">
+      <span>{label}</span>
+      <div>
+        <strong>{metric.price ?? "暂无数据"}</strong>
+        <b className={`index-change index-change--${tone}`}>{formatChangePercent(metric.changePercent)}</b>
+      </div>
+    </div>
+  );
 }
 
 function formatChangePercent(value: string | null) {
@@ -36,9 +49,8 @@ function formatBeijingTime(value: string | null) {
 }
 
 export function MarketIndexCard({ quote }: MarketIndexCardProps) {
-  const tone = changeTone(quote.changePercent);
   return (
-    <article className={`index-card index-card--${tone}`}>
+    <article className="index-card">
       <div className="index-heading">
         <div>
           <h3>{quote.name}</h3>
@@ -48,9 +60,10 @@ export function MarketIndexCard({ quote }: MarketIndexCardProps) {
           {displayStatus(quote.status)}
         </span>
       </div>
-      <div className="index-values">
-        <strong>{quote.currentPrice ?? "暂无数据"}</strong>
-        <span className="index-change">{formatChangePercent(quote.changePercent)}</span>
+      <div className="index-metric-list">
+        <IndexMetricRow label="昨日收盘" metric={quote.lastClose} />
+        <IndexMetricRow label="近5日平均收盘" metric={quote.fiveDayAverage} />
+        <IndexMetricRow label="近10日平均收盘" metric={quote.tenDayAverage} />
       </div>
       <dl className="quote-meta">
         <div><dt>来源</dt><dd>{quote.source ?? "暂无数据"}</dd></div>
