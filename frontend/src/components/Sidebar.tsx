@@ -1,3 +1,5 @@
+import heroCallIcon from "../../../src-tauri/icons/icon.png";
+
 export type PageId =
   | "dashboard"
   | "news"
@@ -30,7 +32,7 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
   return (
     <aside className="sidebar" aria-label="主导航">
       <div className="brand">
-        <span className="brand-mark" aria-hidden="true">H</span>
+        <span className="brand-mark" aria-hidden="true"><img alt="" src={heroCallIcon} /></span>
         <div>
           <strong>Hero Call</strong>
           <span>AI Portfolio Assistant</span>

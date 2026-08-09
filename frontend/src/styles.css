@@ -16,7 +16,8 @@ button { font: inherit; }
 .sidebar { display: flex; flex-direction: column; min-height: 100vh; padding: 28px 16px 20px; border-right: 1px solid #233149; background: #0b1220; }
 
 .brand { display: flex; align-items: center; gap: 11px; padding: 0 12px 28px; }
-.brand-mark { display: grid; width: 33px; height: 33px; place-items: center; border-radius: 10px; background: #4ed6a5; color: #0a1620; font-weight: 800; }
+.brand-mark { display: grid; width: 33px; height: 33px; place-items: center; overflow: hidden; border-radius: 10px; background: #182337; }
+.brand-mark img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .brand strong, .brand span { display: block; }
 .brand strong { font-size: 15px; letter-spacing: .02em; }
 .brand div span { margin-top: 2px; color: #8291aa; font-size: 11px; letter-spacing: .04em; }
