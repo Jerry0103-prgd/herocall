@@ -28,8 +28,12 @@ function formatStatusTime(value: string | null) {
   if (!value) return "暂无数据";
   const timestamp = new Date(value);
   if (Number.isNaN(timestamp.getTime())) return value;
-  const pad = (number: number) => String(number).padStart(2, "0");
-  return `${timestamp.getFullYear()}-${pad(timestamp.getMonth() + 1)}-${pad(timestamp.getDate())} ${pad(timestamp.getHours())}:${pad(timestamp.getMinutes())}:${pad(timestamp.getSeconds())}`;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(timestamp);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}`;
 }
 
 function sectionTone(section: DataSectionStatus): DataStatusTone {
@@ -109,7 +113,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
           <h1 id="dashboard-title">今日总览</h1>
           <p>关注标的与市场快照。仅展示可追溯、已验证的数据。</p>
         </div>
-        <div className="dashboard-actions"><span className="readonly-badge">只读模式</span><button className="secondary-button" disabled={isRefreshing} onClick={() => void refreshMarketData()} type="button">{isRefreshing ? "正在更新…" : "更新今日市场快照"}</button></div>
+        <div className="dashboard-actions"><button className="secondary-button" disabled={isRefreshing} onClick={() => void refreshMarketData()} type="button">{isRefreshing ? "正在更新…" : "更新今日市场快照"}</button></div>
       </header>
 
       {connectionNotice ? <p className="notice" role="status">{connectionNotice}</p> : null}

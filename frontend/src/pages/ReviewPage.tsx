@@ -17,6 +17,18 @@ function valueOrUnavailable(value: string | null) {
   return value ?? "暂无数据";
 }
 
+function changeTone(value: string | null) {
+  const numericValue = Number.parseFloat(value?.replace("%", "") ?? "");
+  if (!Number.isFinite(numericValue) || numericValue === 0) return "flat";
+  return numericValue > 0 ? "up" : "down";
+}
+
+function formatChangePercent(value: string | null) {
+  if (!value) return "暂无数据";
+  const normalized = value.trim();
+  return normalized.endsWith("%") ? normalized : `${normalized}%`;
+}
+
 function safeErrorMessage(error: unknown, fallback: string) {
   if (typeof error === "string" && error.trim()) return error;
   if (error instanceof Error && error.message.trim()) return error.message;
@@ -121,7 +133,7 @@ export function ReviewPage() {
       {isLoading ? <p className="table-state review-state">正在读取本地复盘…</p> : null}
       {!isLoading && !review ? <p className="table-state review-state">暂无当日复盘</p> : null}
       {!isLoading && review ? <div className="review-content">
-        <section className="review-section" aria-labelledby="market-review-title"><div className="section-heading"><div><p className="section-kicker">Market</p><h2 id="market-review-title">市场表现</h2></div><span>{review.marketSummary.snapshot ? `快照：${review.marketSummary.snapshot.status}` : "暂无当日市场快照"}</span></div><div className="review-index-list">{review.marketSummary.majorIndices.map((index) => <div className="settings-card review-index" key={index.symbol}><strong>{index.name}</strong><span>{index.symbol}</span><b>{valueOrUnavailable(index.changePercent)}</b><small>来源：{index.source ?? "暂无数据"} · 状态：{index.status}</small></div>)}</div></section>
+        <section className="review-section" aria-labelledby="market-review-title"><div className="section-heading"><div><p className="section-kicker">Market</p><h2 id="market-review-title">市场表现</h2></div><span>{review.marketSummary.snapshot ? `快照：${review.marketSummary.snapshot.status}` : "暂无当日市场快照"}</span></div><div className="review-index-list">{review.marketSummary.majorIndices.map((index) => <div className={`settings-card review-index review-index--${changeTone(index.changePercent)}`} key={index.symbol}><strong>{index.name}</strong><span>{index.symbol}</span><b>{formatChangePercent(index.changePercent)}</b><small>来源：{index.source ?? "暂无数据"} · 状态：{index.status}</small></div>)}</div></section>
 
         <section className="review-section" aria-labelledby="holding-review-title"><div className="section-heading"><div><p className="section-kicker">Watchlist</p><h2 id="holding-review-title">关注标的动态</h2></div><span>基于已保存的市场快照</span></div><div className="review-contribution-list">{review.holdingSummary.contributions.length === 0 ? <p className="table-state">暂无关注标的</p> : review.holdingSummary.contributions.map((holding) => <div className="review-contribution" key={holding.symbol}><div><strong>{holding.name}</strong><span>{holding.symbol}</span></div><span>涨跌幅：{valueOrUnavailable(holding.changePercent)}</span></div>)}</div></section>
 

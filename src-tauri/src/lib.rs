@@ -253,6 +253,7 @@ fn complete_initialization(app: tauri::AppHandle) -> Result<InitializationStatus
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             database::service::DatabaseService::initialize_app_database(&app.handle())
                 .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)?;

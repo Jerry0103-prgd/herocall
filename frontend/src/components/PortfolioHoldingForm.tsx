@@ -50,7 +50,7 @@ export function PortfolioHoldingForm({ holding, isSaving, onCancel, onSubmit }: 
   return (
     <form className="holding-form" onSubmit={submit}>
       <div className="form-heading">
-        <div><p className="section-kicker">本地持仓账本</p><h2>{isEditing ? "修改持仓" : "新增持仓"}</h2></div>
+        <div><p className="section-kicker">关注标的</p><h2>{isEditing ? "修改关注标的" : "新增关注"}</h2></div>
         <button className="text-button" onClick={onCancel} type="button">关闭</button>
       </div>
 
@@ -65,7 +65,7 @@ export function PortfolioHoldingForm({ holding, isSaving, onCancel, onSubmit }: 
       <p className="form-note">成本金额、可卖数量及行情相关指标均由本地 Rust 服务计算；未确认行情不会补齐价格。</p>
       <div className="form-actions">
         <button className="secondary-button" onClick={onCancel} type="button">取消</button>
-        <button className="primary-button" disabled={isSaving} type="submit">{isSaving ? "保存中…" : "保存持仓"}</button>
+        <button className="primary-button" disabled={isSaving} type="submit">{isSaving ? "保存中…" : "保存关注"}</button>
       </div>
     </form>
   );

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { loadHoldingNewsArticles, type NewsArticle } from "../services/news";
 
@@ -28,6 +29,14 @@ export function NewsPage() {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+  async function openOriginalArticle(url: string) {
+    try {
+      await openUrl(url);
+    } catch {
+      setMessage("无法打开原文链接，请稍后重试。");
+    }
+  }
+
   return (
     <section className="page news-page" aria-labelledby="news-title">
       <header className="page-header">
@@ -45,7 +54,7 @@ export function NewsPage() {
         <article className="news-card" key={article.id}>
           <div className="news-card-heading"><div><span className={`news-source-type news-source-type--${article.sourceType.toLowerCase()}`}>{sourceTypeLabel(article.sourceType)}</span><h2>{article.title}</h2></div><span className="news-related-security">{article.relatedSecurity ?? "未关联证券"}</span></div>
           <p className="news-summary">{article.summary}</p>
-          <footer className="news-meta"><span>来源：{article.source}</span><span>发布时间：{article.publishedAt}</span><span>抓取时间：{article.fetchTime}</span><a href={article.url} rel="noreferrer" target="_blank">查看原文</a></footer>
+          <footer className="news-meta"><span>来源：{article.source}</span><span>发布时间：{article.publishedAt}</span><span>抓取时间：{article.fetchTime}</span><button className="news-link-button" onClick={() => void openOriginalArticle(article.url)} type="button">查看原文</button></footer>
         </article>
       ))}</div> : null}
     </section>
