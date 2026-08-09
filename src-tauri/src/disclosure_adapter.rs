@@ -58,26 +58,42 @@ impl EastmoneyAnnouncementAdapter {
         let fetched_at = Utc::now();
         let mut all = Vec::new();
         for security in securities {
-            if !security.symbol.chars().all(|ch| ch.is_ascii_digit()) {
+            let Some(stock_code) = eastmoney_stock_code(&security.symbol) else {
+                news_diagnostic(format!(
+                    "security_id={} stored_symbol={} request_skipped=unsupported_symbol_format",
+                    security.id, security.symbol
+                ));
                 continue;
-            }
-            let url = format!("{EASTMONEY_ANNOUNCEMENT_URL}?sr=-1&page_size=20&page_index=1&ann_type=A&stock_list={}", security.symbol);
-            let body = curl_json(&url)?;
+            };
+            news_diagnostic(format!(
+                "security_id={} stored_symbol={} request_stock_list={stock_code}",
+                security.id, security.symbol
+            ));
+            let url = format!("{EASTMONEY_ANNOUNCEMENT_URL}?sr=-1&page_size=20&page_index=1&ann_type=A&stock_list={stock_code}");
+            let response = curl_json(&url)?;
             let response: EastmoneyResponse =
-                serde_json::from_slice(&body).map_err(|_| DisclosureAdapterError {
-                    message: "东方财富公告数据格式异常".into(),
+                serde_json::from_slice(&response.body).map_err(|error| {
+                    news_diagnostic(format!(
+                        "security_id={} request_stock_list={stock_code} json_parse_error={error}",
+                        security.id
+                    ));
+                    DisclosureAdapterError {
+                        message: "东方财富公告数据格式异常".into(),
+                    }
                 })?;
             if response.success != 1 {
+                news_diagnostic(format!(
+                    "security_id={} request_stock_list={stock_code} provider_success={}",
+                    security.id, response.success
+                ));
                 return Err(DisclosureAdapterError {
                     message: "东方财富公告数据源未返回成功状态".into(),
                 });
             }
+            let source_count = response.data.list.len();
+            let before_matched = all.len();
             for item in response.data.list {
-                if !item
-                    .codes
-                    .iter()
-                    .any(|code| code.stock_code == security.symbol)
-                {
+                if !item.codes.iter().any(|code| code.stock_code == stock_code) {
                     continue;
                 }
                 let published_at = parse_source_time(&item.display_time).ok_or_else(|| {
@@ -100,7 +116,17 @@ impl EastmoneyAnnouncementAdapter {
                     ),
                 });
             }
+            news_diagnostic(format!(
+                "security_id={} request_stock_list={stock_code} provider_items={source_count} matched_items={}",
+                security.id,
+                all.len() - before_matched
+            ));
         }
+        news_diagnostic(format!(
+            "requested_securities={} returned_disclosures={}",
+            securities.len(),
+            all.len()
+        ));
         Ok(all)
     }
 }
@@ -208,16 +234,21 @@ fn parse_source_time(value: &str) -> Option<DateTime<Utc>> {
         .map(|time| time.with_timezone(&Utc))
 }
 
-fn curl_json(url: &str) -> Result<Vec<u8>, DisclosureAdapterError> {
+struct HttpJsonResponse {
+    body: Vec<u8>,
+}
+
+fn curl_json(url: &str) -> Result<HttpJsonResponse, DisclosureAdapterError> {
     let output = Command::new("curl")
         .args([
-            "--fail",
             "--silent",
             "--show-error",
             "--max-time",
             "15",
             "--header",
             "User-Agent: Hero Call/0.9",
+            "--write-out",
+            "\n__HERO_CALL_HTTP_STATUS__:%{http_code}",
             url,
         ])
         .output()
@@ -225,11 +256,53 @@ fn curl_json(url: &str) -> Result<Vec<u8>, DisclosureAdapterError> {
             message: "系统 HTTP 传输不可用".into(),
         })?;
     if !output.status.success() {
+        let transport_error = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        news_diagnostic(format!("eastmoney_transport_error={transport_error}"));
         return Err(DisclosureAdapterError {
             message: "东方财富公告请求失败".into(),
         });
     }
-    Ok(output.stdout)
+    let marker = b"\n__HERO_CALL_HTTP_STATUS__:";
+    let Some(marker_position) = output
+        .stdout
+        .windows(marker.len())
+        .rposition(|window| window == marker)
+    else {
+        news_diagnostic("eastmoney_http_status=unavailable".into());
+        return Err(DisclosureAdapterError {
+            message: "东方财富公告请求未返回 HTTP 状态".into(),
+        });
+    };
+    let status = std::str::from_utf8(&output.stdout[marker_position + marker.len()..])
+        .ok()
+        .and_then(|value| value.trim().parse::<u16>().ok());
+    let Some(status) = status else {
+        news_diagnostic("eastmoney_http_status=unparseable".into());
+        return Err(DisclosureAdapterError {
+            message: "东方财富公告请求 HTTP 状态异常".into(),
+        });
+    };
+    news_diagnostic(format!("eastmoney_http_status={status}"));
+    if !(200..300).contains(&status) {
+        return Err(DisclosureAdapterError {
+            message: format!("东方财富公告请求失败（HTTP {status}）"),
+        });
+    }
+    Ok(HttpJsonResponse {
+        body: output.stdout[..marker_position].to_vec(),
+    })
+}
+
+fn eastmoney_stock_code(symbol: &str) -> Option<&str> {
+    let code = symbol
+        .trim()
+        .split_once('.')
+        .map_or(symbol.trim(), |(code, _)| code);
+    (code.len() == 6 && code.chars().all(|character| character.is_ascii_digit())).then_some(code)
+}
+
+fn news_diagnostic(message: String) {
+    eprintln!("[hero-call][news-diagnostic] {message}");
 }
 
 #[derive(Debug, Deserialize)]
@@ -273,5 +346,14 @@ mod tests {
             classify_event("董事会决议公告"),
             EventType::CompanyAnnouncement
         );
+    }
+
+    #[test]
+    fn eastmoney_stock_code_accepts_plain_and_exchange_qualified_a_share_symbols() {
+        assert_eq!(eastmoney_stock_code("300209"), Some("300209"));
+        assert_eq!(eastmoney_stock_code("300209.SZ"), Some("300209"));
+        assert_eq!(eastmoney_stock_code("600330.SH"), Some("600330"));
+        assert_eq!(eastmoney_stock_code("HK.00700"), None);
+        assert_eq!(eastmoney_stock_code("30020"), None);
     }
 }

@@ -115,7 +115,7 @@ impl MarketRefreshService {
             .map(DisclosureSecurity::from)
             .collect::<Vec<_>>();
         let disclosure_adapter = EastmoneyAnnouncementAdapter;
-        let (news_inputs, news_issue) =
+        let (news_inputs, news_fetch_issue) =
             match disclosure_adapter.fetch_articles(&disclosure_securities) {
                 Ok(items) => (items, None),
                 Err(error) => (Vec::new(), Some(error.message)),
@@ -125,10 +125,24 @@ impl MarketRefreshService {
                 Ok(items) => (items, None),
                 Err(error) => (Vec::new(), Some(error.message)),
             };
-        let news = news_inputs
-            .into_iter()
-            .filter_map(|input| NewsService::ingest(database, input).ok())
+        let news_security_ids = news_inputs
+            .iter()
+            .filter_map(|input| input.related_security_id)
             .collect::<Vec<_>>();
+        let mut news = Vec::new();
+        let mut news_save_issue = None;
+        for input in news_inputs {
+            let related_security_id = input.related_security_id;
+            match NewsService::ingest(database, input) {
+                Ok(article) => news.push(article),
+                Err(error) => {
+                    news_diagnostic(format!(
+                        "news_article_save_failed related_security_id={related_security_id:?} error={error}"
+                    ));
+                    news_save_issue = Some("东方财富公告未能保存到本地。".into());
+                }
+            }
+        }
         let events = event_inputs
             .into_iter()
             .filter_map(|input| EventService::ingest(database, input).ok())
@@ -155,6 +169,11 @@ impl MarketRefreshService {
             }
             .into(),
         })?;
+        news_diagnostic(format!(
+            "manual_refresh_run_id={} saved_news_articles={} related_security_ids={news_security_ids:?}",
+            run.id,
+            news.len()
+        ));
         database.link_news_articles_to_manual_refresh_run(
             run.id,
             &news.iter().map(|item| item.id).collect::<Vec<_>>(),
@@ -176,9 +195,14 @@ impl MarketRefreshService {
                 },
                 item_count: news.len(),
                 updated_at: news.iter().map(|item| item.fetch_time.clone()).max(),
-                message: news_issue.or_else(|| {
-                    news.is_empty()
-                        .then(|| "未返回与当前持仓关联的公开公告。".into())
+                message: news_fetch_issue.or(news_save_issue).or_else(|| {
+                    news.is_empty().then(|| {
+                        if disclosure_securities.is_empty() {
+                            "NO_DATA：当前没有持仓证券，未请求东方财富公告。".into()
+                        } else {
+                            "NO_DATA：东方财富未返回与当前持仓关联的公开公告。".into()
+                        }
+                    })
                 }),
             },
             events: SnapshotSectionView {
@@ -311,6 +335,10 @@ impl MarketRefreshService {
             message,
         }
     }
+}
+
+fn news_diagnostic(message: String) {
+    eprintln!("[hero-call][news-diagnostic] {message}");
 }
 
 #[cfg(test)]

@@ -16,8 +16,9 @@ export function NewsPage() {
   const refresh = useCallback(async () => {
     setIsLoading(true);
     try {
-      setArticles(await loadHoldingNewsArticles());
-      setMessage(null);
+      const result = await loadHoldingNewsArticles();
+      setArticles(result.articles);
+      setMessage(result.noDataReason);
     } catch {
       setMessage("本地资讯服务暂不可用");
     } finally {

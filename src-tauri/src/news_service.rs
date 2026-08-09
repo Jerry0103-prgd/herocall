@@ -95,6 +95,15 @@ pub struct NewsArticleView {
     pub related_security: Option<String>,
 }
 
+/// Read model for the news page. The reason is intentionally derived from persisted state only:
+/// it never suggests that unavailable provider content exists.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HoldingNewsView {
+    pub articles: Vec<NewsArticleView>,
+    pub no_data_reason: Option<String>,
+}
+
 #[derive(Debug)]
 pub enum NewsServiceError {
     Database(DatabaseError),
@@ -218,6 +227,30 @@ impl NewsService {
             .collect()
     }
 
+    pub fn list_for_holdings_with_status(
+        database: &DatabaseService,
+    ) -> Result<HoldingNewsView, NewsServiceError> {
+        let articles = Self::list_for_holdings(database)?;
+        if !articles.is_empty() {
+            return Ok(HoldingNewsView {
+                articles,
+                no_data_reason: None,
+            });
+        }
+
+        let no_data_reason = if database.list_market_securities_for_holdings()?.is_empty() {
+            "NO_DATA：当前没有持仓证券，未请求东方财富公告。".into()
+        } else if database.latest_manual_refresh_run()?.is_none() {
+            "NO_DATA：尚未更新今日市场快照，未请求东方财富公告。".into()
+        } else {
+            "NO_DATA：最近一次市场快照未保存与当前持仓关联的东方财富公告；请重新更新今日市场快照，并查看更新结果中的数据源提示。".into()
+        };
+        Ok(HoldingNewsView {
+            articles,
+            no_data_reason: Some(no_data_reason),
+        })
+    }
+
     fn validate_input(
         database: &DatabaseService,
         input: NewsArticleInput,
@@ -294,7 +327,7 @@ fn normalized_timestamp(value: &str) -> Result<String, NewsServiceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::service::{NewCashAccount, NewHolding, NewSecurity};
+    use crate::database::service::{NewCashAccount, NewHolding, NewManualRefreshRun, NewSecurity};
 
     fn related_security(database: &DatabaseService) -> i64 {
         let security = database
@@ -427,5 +460,42 @@ mod tests {
             .fetch_articles(&[])
             .expect("recorded adapter")
             .is_empty());
+    }
+
+    #[test]
+    fn holding_news_empty_state_explains_whether_a_refresh_is_required() {
+        let database = DatabaseService::open_in_memory().expect("create database");
+        let no_holding =
+            NewsService::list_for_holdings_with_status(&database).expect("read empty holding news");
+        assert!(no_holding.articles.is_empty());
+        assert_eq!(
+            no_holding.no_data_reason.as_deref(),
+            Some("NO_DATA：当前没有持仓证券，未请求东方财富公告。")
+        );
+
+        related_security(&database);
+        let needs_refresh = NewsService::list_for_holdings_with_status(&database)
+            .expect("read holding news before refresh");
+        assert_eq!(
+            needs_refresh.no_data_reason.as_deref(),
+            Some("NO_DATA：尚未更新今日市场快照，未请求东方财富公告。")
+        );
+
+        database
+            .create_manual_refresh_run(NewManualRefreshRun {
+                started_at: "2026-08-09T00:00:00Z".into(),
+                completed_at: "2026-08-09T00:01:00Z".into(),
+                holdings_snapshot_id: None,
+                indices_snapshot_id: None,
+                portfolio_json: "[]".into(),
+                status: "NO_DATA".into(),
+            })
+            .expect("create empty manual refresh");
+        let no_matching_announcement = NewsService::list_for_holdings_with_status(&database)
+            .expect("read holding news after an empty refresh");
+        assert_eq!(
+            no_matching_announcement.no_data_reason.as_deref(),
+            Some("NO_DATA：最近一次市场快照未保存与当前持仓关联的东方财富公告；请重新更新今日市场快照，并查看更新结果中的数据源提示。")
+        );
     }
 }

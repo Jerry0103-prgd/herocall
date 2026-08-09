@@ -23,7 +23,7 @@ use dashboard_service::{AssetSummaryView, DashboardService, MarketIndexQuoteView
 use event_service::{EventService, EventView};
 use initialization_service::{InitializationService, InitializationStatusView};
 use market_refresh_service::{ManualMarketSnapshotView, MarketRefreshService, MarketRefreshView};
-use news_service::{NewsArticleView, NewsService};
+use news_service::{HoldingNewsView, NewsService};
 use portfolio_ui_service::{
     CreateHoldingInput, PortfolioHoldingView, PortfolioUiService, UpdateHoldingInput,
 };
@@ -170,10 +170,10 @@ fn create_database_backup(app: tauri::AppHandle) -> Result<BackupView, String> {
 }
 
 #[tauri::command]
-fn get_holding_news_articles(app: tauri::AppHandle) -> Result<Vec<NewsArticleView>, String> {
+fn get_holding_news_articles(app: tauri::AppHandle) -> Result<HoldingNewsView, String> {
     let database = database::service::DatabaseService::open_app_database(&app)
         .map_err(|error| error.to_string())?;
-    NewsService::list_for_holdings(&database).map_err(|error| error.to_string())
+    NewsService::list_for_holdings_with_status(&database).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

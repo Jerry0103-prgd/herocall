@@ -14,6 +14,11 @@ export type NewsArticle = {
   relatedSecurity: string | null;
 };
 
-export function loadHoldingNewsArticles(): Promise<NewsArticle[]> {
-  return invoke<NewsArticle[]>("get_holding_news_articles");
+export type HoldingNewsResult = {
+  articles: NewsArticle[];
+  noDataReason: string | null;
+};
+
+export function loadHoldingNewsArticles(): Promise<HoldingNewsResult> {
+  return invoke<HoldingNewsResult>("get_holding_news_articles");
 }
