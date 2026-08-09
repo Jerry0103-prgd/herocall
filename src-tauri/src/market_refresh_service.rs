@@ -125,10 +125,12 @@ impl MarketRefreshService {
                 Ok(items) => (items, None),
                 Err(error) => (Vec::new(), Some(error.message)),
             };
-        let news_security_ids = news_inputs
+        let mut news_security_ids = news_inputs
             .iter()
             .filter_map(|input| input.related_security_id)
             .collect::<Vec<_>>();
+        news_security_ids.sort_unstable();
+        news_security_ids.dedup();
         let mut news = Vec::new();
         let mut news_save_issue = None;
         for input in news_inputs {
@@ -169,15 +171,16 @@ impl MarketRefreshService {
             }
             .into(),
         })?;
-        news_diagnostic(format!(
-            "manual_refresh_run_id={} saved_news_articles={} related_security_ids={news_security_ids:?}",
-            run.id,
-            news.len()
-        ));
         database.link_news_articles_to_manual_refresh_run(
             run.id,
             &news.iter().map(|item| item.id).collect::<Vec<_>>(),
         )?;
+        news_diagnostic(format!(
+            "refresh_run_id={} saved_news_count={} linked_security_count={} linked_security_ids={news_security_ids:?}",
+            run.id,
+            news.len(),
+            news_security_ids.len()
+        ));
         database.link_events_to_manual_refresh_run(
             run.id,
             &events.iter().map(|item| item.id).collect::<Vec<_>>(),

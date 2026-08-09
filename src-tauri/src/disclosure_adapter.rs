@@ -65,11 +65,11 @@ impl EastmoneyAnnouncementAdapter {
                 ));
                 continue;
             };
+            let url = format!("{EASTMONEY_ANNOUNCEMENT_URL}?sr=-1&page_size=20&page_index=1&ann_type=A&stock_list={stock_code}");
             news_diagnostic(format!(
-                "security_id={} stored_symbol={} request_stock_list={stock_code}",
+                "security_id={} stored_symbol={} stock_code={stock_code} request_url={url}",
                 security.id, security.symbol
             ));
-            let url = format!("{EASTMONEY_ANNOUNCEMENT_URL}?sr=-1&page_size=20&page_index=1&ann_type=A&stock_list={stock_code}");
             let response = curl_json(&url)?;
             let response: EastmoneyResponse =
                 serde_json::from_slice(&response.body).map_err(|error| {
@@ -117,7 +117,7 @@ impl EastmoneyAnnouncementAdapter {
                 });
             }
             news_diagnostic(format!(
-                "security_id={} request_stock_list={stock_code} provider_items={source_count} matched_items={}",
+                "security_id={} stock_code={stock_code} returned_count={source_count} parsed_count={}",
                 security.id,
                 all.len() - before_matched
             ));
@@ -282,7 +282,7 @@ fn curl_json(url: &str) -> Result<HttpJsonResponse, DisclosureAdapterError> {
             message: "东方财富公告请求 HTTP 状态异常".into(),
         });
     };
-    news_diagnostic(format!("eastmoney_http_status={status}"));
+    news_diagnostic(format!("http_status={status}"));
     if !(200..300).contains(&status) {
         return Err(DisclosureAdapterError {
             message: format!("东方财富公告请求失败（HTTP {status}）"),
