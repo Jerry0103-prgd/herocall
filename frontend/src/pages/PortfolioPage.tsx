@@ -76,7 +76,7 @@ export function PortfolioPage() {
               <article className="watchlist-item" key={holding.holdingId}>
                 <span className="code-cell">{holding.symbol}</span>
                 <strong>{holding.name}</strong>
-                {holding.isWatchlist ? <button className="watchlist-remove-button" onClick={() => void remove(holding)} type="button">删除关注</button> : null}
+                <button className="watchlist-remove-button" onClick={() => void remove(holding)} type="button">取消关注</button>
               </article>
             ))}
           </div>

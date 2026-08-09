@@ -13,7 +13,18 @@ export type AiReview = {
   facts: string[];
   inferences: string[];
   risks: string[];
+  report: AiResearchReport | null;
   createdAt: string;
+};
+
+export type AiResearchReport = {
+  stockStatus: string;
+  marketAnalysis: string;
+  sectorAnalysis: string;
+  newsAnalysis: string;
+  technicalAnalysis: string;
+  strategyReference: string;
+  conclusion: string;
 };
 
 export type DeepSeekStatus = { status: "已配置" | "未配置" };

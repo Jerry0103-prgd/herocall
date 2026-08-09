@@ -3,6 +3,16 @@ import { useCallback, useEffect, useState } from "react";
 import { generateAiReview, loadAiServiceStatus, loadLatestAiReview, type AiReview, type AiServiceStatus } from "../services/ai";
 import { generateDailyReview, loadDailyReview, type DailyReview } from "../services/review";
 
+const reportLabels = [
+  ["当前个股情况", "stockStatus"],
+  ["当日市场整体情绪和板块情况", "marketAnalysis"],
+  ["个股所属板块分析", "sectorAnalysis"],
+  ["个股消息面分析", "newsAnalysis"],
+  ["个股技术面分析", "technicalAnalysis"],
+  ["策略参考", "strategyReference"],
+  ["综合结论", "conclusion"],
+] as const;
+
 type AiGenerationState = "idle" | "generating" | "success" | "failed";
 
 function chinaToday() {
@@ -149,7 +159,7 @@ export function ReviewPage() {
         {aiGenerationState === "generating" ? <div className="settings-card ai-empty-state">正在向 DeepSeek 请求结构化复盘，请稍候。</div> : null}
         {aiGenerationState === "failed" && aiError ? <div className="settings-card ai-empty-state ai-error-state" role="alert">生成失败：{aiError}</div> : null}
         {aiStatus?.configured && review && !aiReview && aiGenerationState === "idle" ? <div className="settings-card ai-empty-state">尚未生成AI辅助分析</div> : null}
-        {aiStatus?.configured && aiReview ? <div className="ai-review-grid"><section className="settings-card ai-section ai-report-card ai-report-card--facts"><h3><span aria-hidden="true">📌</span> 市场事实</h3><p>FACTS</p><ul>{aiReview.facts.map((item) => <li key={item}>{item}</li>)}</ul></section><section className="settings-card ai-section ai-report-card ai-report-card--inferences"><h3><span aria-hidden="true">🧠</span> AI分析</h3><p>INFERENCES</p><ul>{aiReview.inferences.map((item) => <li key={item}>{item}</li>)}</ul></section><section className="settings-card ai-section ai-report-card ai-report-card--risks"><h3><span aria-hidden="true">⚠</span> 风险提醒</h3><p>RISKS</p><ul>{aiReview.risks.map((item) => <li key={item}>{item}</li>)}</ul></section></div> : null}
+        {aiStatus?.configured && aiReview ? <div className="ai-report-wrap"><div className="ai-report-heading"><div><p className="section-kicker">AI research report</p><h3>AI投研复盘报告</h3></div><span>仅供信息整理与观察，不构成交易建议。</span></div><div className="ai-report-table-scroll"><table className="ai-report-table"><thead><tr><th>分析维度</th><th>AI复盘结果</th></tr></thead><tbody>{aiReview.report ? reportLabels.map(([label, key]) => <tr key={key}><th scope="row">{label}</th><td>{aiReview.report?.[key] ?? "暂无数据"}</td></tr>) : <><tr><th scope="row">历史事实</th><td>{aiReview.facts.join("\n")}</td></tr><tr><th scope="row">历史分析</th><td>{aiReview.inferences.join("\n")}</td></tr><tr><th scope="row">历史风险</th><td>{aiReview.risks.join("\n")}</td></tr></>}</tbody></table></div><details className="ai-audit-details"><summary>查看 FACTS / INFERENCES / RISKS 审计依据</summary><div className="ai-audit-grid"><section><strong>FACTS</strong><ul>{aiReview.facts.map((item) => <li key={item}>{item}</li>)}</ul></section><section><strong>INFERENCES</strong><ul>{aiReview.inferences.map((item) => <li key={item}>{item}</li>)}</ul></section><section><strong>RISKS</strong><ul>{aiReview.risks.map((item) => <li key={item}>{item}</li>)}</ul></section></div></details></div> : null}
       </section>
     </section>
   );

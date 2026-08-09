@@ -249,6 +249,7 @@ pub struct AiReview {
     pub facts: String,
     pub inferences: String,
     pub risks: String,
+    pub report_json: Option<String>,
     pub created_at: String,
 }
 
@@ -262,6 +263,18 @@ pub struct NewAiReview {
     pub facts: String,
     pub inferences: String,
     pub risks: String,
+    pub report_json: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchlistItemData {
+    pub watchlist_item_id: i64,
+    pub security_id: i64,
+    pub name: String,
+    pub symbol: String,
+    pub market: String,
+    pub security_type: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -574,8 +587,8 @@ impl DatabaseService {
             "
             INSERT INTO ai_reviews (
                 review_id, model, prompt_version, context_id, provider, request_status,
-                facts, inferences, risks
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'COMPLETED', ?6, ?7, ?8)
+                facts, inferences, risks, report_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'COMPLETED', ?6, ?7, ?8, ?9)
             ",
             params![
                 input.review_id,
@@ -586,6 +599,7 @@ impl DatabaseService {
                 input.facts,
                 input.inferences,
                 input.risks,
+                input.report_json,
             ],
         )?;
         self.get_ai_review(self.connection.last_insert_rowid())
@@ -771,7 +785,7 @@ impl DatabaseService {
             .query_row(
                 "
                 SELECT id, review_id, model, prompt_version, context_id, provider, request_status,
-                       error_code, facts, inferences, risks, created_at
+                       error_code, facts, inferences, risks, report_json, created_at
                 FROM ai_reviews WHERE id = ?1
                 ",
                 [id],
@@ -788,7 +802,7 @@ impl DatabaseService {
             .query_row(
                 "
                 SELECT id, review_id, model, prompt_version, context_id, provider, request_status,
-                       error_code, facts, inferences, risks, created_at
+                       error_code, facts, inferences, risks, report_json, created_at
                 FROM ai_reviews WHERE review_id = ?1
                 ORDER BY created_at DESC, id DESC
                 LIMIT 1
@@ -806,7 +820,7 @@ impl DatabaseService {
             SELECT e.id, e.event_type, e.title, e.security_id, e.event_time, e.timezone, e.source,
                    e.source_url, e.status, e.created_at, s.name, s.symbol,
                    CASE WHEN e.security_id IS NOT NULL AND EXISTS (
-                       SELECT 1 FROM holdings h WHERE h.security_id = e.security_id
+                       SELECT 1 FROM watchlist_items w WHERE w.security_id = e.security_id
                    ) THEN 1 ELSE 0 END
             FROM events e
             LEFT JOIN securities s ON s.id = e.security_id
@@ -914,7 +928,7 @@ impl DatabaseService {
         self.list_news_articles_by_scope(
             "
             WHERE EXISTS (
-                SELECT 1 FROM holdings h WHERE h.security_id = n.related_security_id
+                SELECT 1 FROM watchlist_items w WHERE w.security_id = n.related_security_id
             )
             ",
         )
@@ -933,7 +947,7 @@ impl DatabaseService {
     ) -> DatabaseResult<Vec<EventWithSecurity>> {
         let mut statement = self.connection.prepare(
             "SELECT e.id, e.event_type, e.title, e.security_id, e.event_time, e.timezone, e.source, e.source_url, e.status, e.created_at, s.name, s.symbol,
-                    CASE WHEN e.security_id IS NOT NULL AND EXISTS (SELECT 1 FROM holdings h WHERE h.security_id=e.security_id) THEN 1 ELSE 0 END
+                    CASE WHEN e.security_id IS NOT NULL AND EXISTS (SELECT 1 FROM watchlist_items w WHERE w.security_id=e.security_id) THEN 1 ELSE 0 END
              FROM events e JOIN manual_refresh_events mre ON mre.event_id=e.id LEFT JOIN securities s ON s.id=e.security_id
              WHERE mre.manual_refresh_run_id=?1"
         )?;
@@ -969,16 +983,15 @@ impl DatabaseService {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    /// Returns securities recorded by the user, including zero-position research watchlist items.
-    /// The refresh service never invents symbols or asks a provider for arbitrary codes.
+    /// Returns only securities explicitly followed by the user. The refresh service never
+    /// invents symbols or asks a provider for arbitrary codes.
     pub fn list_market_securities_for_holdings(&self) -> DatabaseResult<Vec<MarketSecurity>> {
         let mut statement = self.connection.prepare(
             "
             SELECT DISTINCT s.id, s.symbol, s.name, s.market
-            FROM holdings h
-            JOIN securities s ON s.id = h.security_id
-            WHERE h.quantity >= 0
-            ORDER BY s.market, s.symbol
+            FROM watchlist_items w
+            JOIN securities s ON s.id = w.security_id
+            ORDER BY w.created_at DESC, w.id DESC
             ",
         )?;
         let rows = statement.query_map([], |row| {
@@ -990,6 +1003,103 @@ impl DatabaseService {
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn list_watchlist_item_data(&self) -> DatabaseResult<Vec<WatchlistItemData>> {
+        let mut statement = self.connection.prepare(
+            "
+            SELECT w.id, s.id, s.name, s.symbol, s.market, s.security_type, w.created_at
+            FROM watchlist_items w
+            JOIN securities s ON s.id = w.security_id
+            ORDER BY w.created_at DESC, w.id DESC
+            ",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(WatchlistItemData {
+                watchlist_item_id: row.get(0)?,
+                security_id: row.get(1)?,
+                name: row.get(2)?,
+                symbol: row.get(3)?,
+                market: row.get(4)?,
+                security_type: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn create_watchlist_item(&self, security_id: i64) -> DatabaseResult<WatchlistItemData> {
+        self.connection.execute(
+            "INSERT INTO watchlist_items (security_id) VALUES (?1)",
+            [security_id],
+        )?;
+        self.get_watchlist_item_data(self.connection.last_insert_rowid())
+    }
+
+    pub fn ensure_watchlist_item(&self, security_id: i64) -> DatabaseResult<()> {
+        self.connection.execute(
+            "INSERT OR IGNORE INTO watchlist_items (security_id) VALUES (?1)",
+            [security_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn find_watchlist_item_by_security(
+        &self,
+        security_id: i64,
+    ) -> DatabaseResult<Option<WatchlistItemData>> {
+        self.connection
+            .query_row(
+                "
+                SELECT w.id, s.id, s.name, s.symbol, s.market, s.security_type, w.created_at
+                FROM watchlist_items w JOIN securities s ON s.id = w.security_id
+                WHERE w.security_id = ?1
+                ",
+                [security_id],
+                |row| {
+                    Ok(WatchlistItemData {
+                        watchlist_item_id: row.get(0)?,
+                        security_id: row.get(1)?,
+                        name: row.get(2)?,
+                        symbol: row.get(3)?,
+                        market: row.get(4)?,
+                        security_type: row.get(5)?,
+                        created_at: row.get(6)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn delete_watchlist_item(&self, id: i64) -> DatabaseResult<usize> {
+        self.connection
+            .execute("DELETE FROM watchlist_items WHERE id = ?1", [id])
+            .map_err(Into::into)
+    }
+
+    fn get_watchlist_item_data(&self, id: i64) -> DatabaseResult<WatchlistItemData> {
+        self.connection
+            .query_row(
+                "
+                SELECT w.id, s.id, s.name, s.symbol, s.market, s.security_type, w.created_at
+                FROM watchlist_items w JOIN securities s ON s.id = w.security_id
+                WHERE w.id = ?1
+                ",
+                [id],
+                |row| {
+                    Ok(WatchlistItemData {
+                        watchlist_item_id: row.get(0)?,
+                        security_id: row.get(1)?,
+                        name: row.get(2)?,
+                        symbol: row.get(3)?,
+                        market: row.get(4)?,
+                        security_type: row.get(5)?,
+                        created_at: row.get(6)?,
+                    })
+                },
+            )
+            .map_err(Into::into)
     }
 
     pub fn has_confirmed_transactions(&self) -> DatabaseResult<bool> {
@@ -1184,6 +1294,7 @@ impl DatabaseService {
                 input.as_of_date,
             ],
         )?;
+        self.ensure_watchlist_item(input.security_id)?;
         self.get_holding(self.connection.last_insert_rowid())
     }
 
@@ -1531,7 +1642,8 @@ impl DatabaseService {
             facts: row.get(8)?,
             inferences: row.get(9)?,
             risks: row.get(10)?,
-            created_at: row.get(11)?,
+            report_json: row.get(11)?,
+            created_at: row.get(12)?,
         })
     }
 
@@ -1924,15 +2036,15 @@ mod tests {
                     'market_snapshots', 'market_quotes', 'data_sources', 'news_articles',
                     'daily_reviews', 'ai_reviews', 'events', 'app_settings', 'market_index_quotes',
                     'manual_refresh_runs', 'ai_review_contexts', 'manual_refresh_news_articles',
-                    'manual_refresh_events'
+                    'manual_refresh_events', 'watchlist_items'
                 )",
                 [],
                 |row| row.get(0),
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 12);
-        assert_eq!(table_count, 17);
+        assert_eq!(migration_count, 14);
+        assert_eq!(table_count, 18);
     }
 
     #[test]
@@ -2143,8 +2255,22 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("verify AI provider column");
+        let watchlist_item_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM watchlist_items WHERE security_id = ?1",
+                [security_id],
+                |row| row.get(0),
+            )
+            .expect("verify legacy holding migrated to follow");
+        let ai_review_report_column: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('ai_reviews') WHERE name = 'report_json'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("verify AI report column");
 
-        assert_eq!(migration_count, 12);
+        assert_eq!(migration_count, 14);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -2163,6 +2289,8 @@ mod tests {
         assert_eq!(manual_refresh_runs_exists, 1);
         assert_eq!(ai_contexts_exists, 1);
         assert_eq!(ai_review_provider_column, 1);
+        assert_eq!(ai_review_report_column, 1);
+        assert_eq!(watchlist_item_count, 1);
         assert_eq!(market_index_quotes_exists, 1);
     }
 
@@ -2212,7 +2340,7 @@ mod tests {
             })
             .expect("read migration count");
         assert_eq!(quote, ("000001.SH".into(), "1.25".into(), "1.25".into()));
-        assert_eq!(migration_count, 12);
+        assert_eq!(migration_count, 14);
 
         let database = DatabaseService { connection };
         let records = database

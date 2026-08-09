@@ -24,7 +24,7 @@ use crate::{
     secure_storage::{get_deepseek_status, load_deepseek_api_key_for_adapter},
 };
 
-const PROMPT_VERSION: &str = "deepseek-review-v1";
+const PROMPT_VERSION: &str = "deepseek-research-report-v2";
 const DEEPSEEK_CHAT_COMPLETIONS_URL: &str = "https://api.deepseek.com/chat/completions";
 const DEEPSEEK_MODEL: &str = "deepseek-chat";
 
@@ -41,6 +41,32 @@ pub struct AiReviewSections {
     pub facts: Vec<String>,
     pub inferences: Vec<String>,
     pub risks: Vec<String>,
+    #[serde(default, rename = "stock_status")]
+    pub stock_status: Option<String>,
+    #[serde(default, rename = "market_analysis")]
+    pub market_analysis: Option<String>,
+    #[serde(default, rename = "sector_analysis")]
+    pub sector_analysis: Option<String>,
+    #[serde(default, rename = "news_analysis")]
+    pub news_analysis: Option<String>,
+    #[serde(default, rename = "technical_analysis")]
+    pub technical_analysis: Option<String>,
+    #[serde(default, rename = "strategy_reference")]
+    pub strategy_reference: Option<String>,
+    #[serde(default, rename = "conclusion")]
+    pub conclusion: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiResearchReport {
+    pub stock_status: String,
+    pub market_analysis: String,
+    pub sector_analysis: String,
+    pub news_analysis: String,
+    pub technical_analysis: String,
+    pub strategy_reference: String,
+    pub conclusion: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -53,6 +79,7 @@ pub struct AiReviewView {
     pub facts: Vec<String>,
     pub inferences: Vec<String>,
     pub risks: Vec<String>,
+    pub report: Option<AiResearchReport>,
     pub created_at: String,
 }
 
@@ -150,7 +177,7 @@ impl AiProviderAdapter for DeepSeekProviderAdapter {
                 "temperature": 0,
                 "response_format": { "type": "json_object" },
                 "messages": [
-                  { "role": "system", "content": "你是个人A股投研复盘的解释助手。仅依据输入 JSON，输出严格 JSON 对象：{\"facts\":[string],\"inferences\":[string],\"risks\":[string]}。FACTS 只陈述有来源和时间的输入事实；INFERENCES 必须是基于这些事实的解释；RISKS 只列不确定性、数据缺失或需核验事项。新闻和事件字段如果为 NO_DATA，必须承认暂无数据。社区观点不能作为事实。严禁买入、卖出、加仓、减仓、建仓、清仓、推荐、目标价、收益预测、收益承诺、保证收益、必涨，且不得补造事实。" },
+                  { "role": "system", "content": "你是个人A股投研复盘的解释助手。仅依据输入 JSON，输出严格 JSON 对象，必须包含：facts:[string]、inferences:[string]、risks:[string]、stock_status:string、market_analysis:string、sector_analysis:string、news_analysis:string、technical_analysis:string、strategy_reference:string、conclusion:string。FACTS 只陈述有来源和时间的输入事实；INFERENCES 必须是基于这些事实的解释；RISKS 只列不确定性、数据缺失或需核验事项。七项报告依次为：当前个股情况、当日市场整体情绪和板块情况、个股所属板块分析、个股消息面分析、个股技术面分析、策略参考、综合结论。无行业、新闻或技术指标时必须明确“暂无数据/未确认”，不得补造内容。策略参考只能描述持有逻辑、风险关注和后续观察条件；综合结论只能总结当前判断。社区观点不能作为事实。严禁买入、卖出、加仓、减仓、建仓、清仓、推荐、目标价、收益预测、收益承诺、保证收益、必涨，且不得补造事实。" },
                   { "role": "user", "content": prompt }
                 ]
             }),
@@ -159,7 +186,7 @@ impl AiProviderAdapter for DeepSeekProviderAdapter {
             .pointer("/choices/0/message/content")
             .and_then(Value::as_str)
             .ok_or_else(|| AiProviderError::invalid_response("缺少 choices[0].message.content"))?;
-        parse_and_validate_sections(content).map_err(|error| {
+        parse_and_validate_provider_sections(content).map_err(|error| {
             ai_diagnostic(format!("json_parse_failed=true reason={error}"));
             AiProviderError::invalid_response(error)
         })
@@ -291,6 +318,7 @@ impl AiService {
         // neither an AI review nor a context record behind.
         let sections = provider.generate(&input)?;
         validate_sections(&sections)?;
+        let report = report_from_sections(&sections)?;
         let context_id = database.create_ai_review_context(NewAiReviewContext {
             review_id: input.daily_review.id,
             manual_refresh_run_id: input.manual_refresh_run_id,
@@ -311,6 +339,7 @@ impl AiService {
             facts: serde_json::to_string(&sections.facts)?,
             inferences: serde_json::to_string(&sections.inferences)?,
             risks: serde_json::to_string(&sections.risks)?,
+            report_json: Some(serde_json::to_string(&report)?),
         })?;
         Self::view_from_record(stored)
     }
@@ -328,8 +357,23 @@ impl AiService {
             facts: serde_json::from_str(&record.facts)?,
             inferences: serde_json::from_str(&record.inferences)?,
             risks: serde_json::from_str(&record.risks)?,
+            stock_status: None,
+            market_analysis: None,
+            sector_analysis: None,
+            news_analysis: None,
+            technical_analysis: None,
+            strategy_reference: None,
+            conclusion: None,
         };
         validate_sections(&sections)?;
+        let report = record
+            .report_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()?;
+        if let Some(report) = &report {
+            validate_report(report)?;
+        }
         Ok(AiReviewView {
             id: record.id,
             review_id: record.review_id,
@@ -338,15 +382,62 @@ impl AiService {
             facts: sections.facts,
             inferences: sections.inferences,
             risks: sections.risks,
+            report,
             created_at: record.created_at,
         })
     }
 }
 
-fn parse_and_validate_sections(value: &str) -> Result<AiReviewSections, AiServiceError> {
+fn parse_and_validate_provider_sections(value: &str) -> Result<AiReviewSections, AiServiceError> {
     let sections = serde_json::from_str(value)?;
     validate_sections(&sections)?;
+    report_from_sections(&sections)?;
     Ok(sections)
+}
+
+fn report_from_sections(sections: &AiReviewSections) -> Result<AiResearchReport, AiServiceError> {
+    let report = AiResearchReport {
+        stock_status: required_report_field(&sections.stock_status)?,
+        market_analysis: required_report_field(&sections.market_analysis)?,
+        sector_analysis: required_report_field(&sections.sector_analysis)?,
+        news_analysis: required_report_field(&sections.news_analysis)?,
+        technical_analysis: required_report_field(&sections.technical_analysis)?,
+        strategy_reference: required_report_field(&sections.strategy_reference)?,
+        conclusion: required_report_field(&sections.conclusion)?,
+    };
+    validate_report(&report)?;
+    Ok(report)
+}
+
+fn required_report_field(value: &Option<String>) -> Result<String, AiServiceError> {
+    value
+        .as_ref()
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_owned)
+        .ok_or(AiServiceError::InvalidOutput("AI投研报告缺少必填维度"))
+}
+
+fn validate_report(report: &AiResearchReport) -> Result<(), AiServiceError> {
+    for entry in [
+        &report.stock_status,
+        &report.market_analysis,
+        &report.sector_analysis,
+        &report.news_analysis,
+        &report.technical_analysis,
+        &report.strategy_reference,
+        &report.conclusion,
+    ] {
+        if entry.trim().is_empty() {
+            return Err(AiServiceError::InvalidOutput("AI投研报告包含空内容"));
+        }
+        if contains_prohibited_language(entry) {
+            return Err(AiServiceError::InvalidOutput(
+                "AI输出包含禁止的投资建议或预测",
+            ));
+        }
+    }
+    Ok(())
 }
 fn validate_sections(sections: &AiReviewSections) -> Result<(), AiServiceError> {
     for entry in sections
@@ -505,7 +596,10 @@ fn ai_diagnostic(message: impl fmt::Display) {
 mod tests {
     use super::*;
     use crate::{
-        database::service::{NewDailyReview, NewEventRecord, NewManualRefreshRun, NewNewsArticle},
+        database::service::{
+            NewAiReview, NewAiReviewContext, NewDailyReview, NewEventRecord, NewManualRefreshRun,
+            NewNewsArticle,
+        },
         market_service::{
             DataSourcePriority, MarketDataSource, MarketQuote, MarketSnapshot, MarketStatus,
             SourceClass,
@@ -646,6 +740,13 @@ mod tests {
                 facts: vec!["当日市场快照暂无数据。".into()],
                 inferences: vec!["基于已保存复盘，账户汇总数据尚未完整。".into()],
                 risks: vec!["需要核验当日市场快照和账户汇总数据。".into()],
+                stock_status: Some("当前个股行情仅以已保存快照为准。".into()),
+                market_analysis: Some("市场整体信息以已保存指数快照为准。".into()),
+                sector_analysis: Some("暂无可核验的板块数据。".into()),
+                news_analysis: Some("已保存公告仅作为事实来源。".into()),
+                technical_analysis: Some("暂无完整技术指标，需结合后续快照观察。".into()),
+                strategy_reference: Some("保留原有关注逻辑，并持续观察数据完整性。".into()),
+                conclusion: Some("当前数据有限，结论仅供后续观察。".into()),
             })
         }
     }
@@ -674,6 +775,13 @@ mod tests {
         assert_eq!(generated.review_id, review.id);
         assert_eq!(generated.facts.len(), 1);
         assert_eq!(
+            generated
+                .report
+                .as_ref()
+                .map(|report| report.conclusion.as_str()),
+            Some("当前数据有限，结论仅供后续观察。")
+        );
+        assert_eq!(
             AiService::latest_for_review(&database, review.id).unwrap(),
             Some(generated)
         );
@@ -693,13 +801,49 @@ mod tests {
     }
     #[test]
     fn invalid_json_and_prohibited_content_are_rejected() {
-        assert!(parse_and_validate_sections(r#"{"facts":[]}"#).is_err());
+        assert!(parse_and_validate_provider_sections(r#"{"facts":[]}"#).is_err());
         assert!(matches!(
-            parse_and_validate_sections(
+            parse_and_validate_provider_sections(
                 r#"{"facts":["行情暂无数据"],"inferences":["建议买入"],"risks":["需要核验来源"]}"#
             ),
             Err(AiServiceError::InvalidOutput(_))
         ));
+    }
+
+    #[test]
+    fn historical_review_without_report_remains_readable() {
+        let database = DatabaseService::open_in_memory().unwrap();
+        let review = stored_review_and_snapshot(&database);
+        let run = database.latest_manual_refresh_run().unwrap().unwrap();
+        let context_id = database
+            .create_ai_review_context(NewAiReviewContext {
+                review_id: review.id,
+                manual_refresh_run_id: run.id,
+                portfolio_json: "[]".into(),
+                market_json: "{}".into(),
+                news_json: "{}".into(),
+                events_json: "{}".into(),
+            })
+            .unwrap();
+        database
+            .create_ai_review(NewAiReview {
+                review_id: review.id,
+                model: "legacy-model".into(),
+                prompt_version: "deepseek-review-v1".into(),
+                context_id,
+                provider: "DEEPSEEK".into(),
+                facts: serde_json::to_string(&vec!["已保存事实".to_string()]).unwrap(),
+                inferences: serde_json::to_string(&vec!["已保存分析".to_string()]).unwrap(),
+                risks: serde_json::to_string(&vec!["已保存风险".to_string()]).unwrap(),
+                report_json: None,
+            })
+            .unwrap();
+
+        let restored = AiService::latest_for_review(&database, review.id)
+            .unwrap()
+            .expect("legacy review remains visible");
+        assert!(restored.report.is_none());
+        assert_eq!(restored.facts, vec!["已保存事实"]);
     }
 
     #[test]

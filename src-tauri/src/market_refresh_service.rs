@@ -101,7 +101,7 @@ impl MarketRefreshService {
         let started_at = Utc::now().to_rfc3339();
         // Freeze the portfolio at the same user-initiated boundary as the market snapshots.
         // Later UI changes must not silently affect a generated AI review.
-        let portfolio_json = serde_json::to_string(&PortfolioUiService::list(database)?)
+        let portfolio_json = serde_json::to_string(&PortfolioUiService::list_watchlist(database)?)
             .map_err(|_| DatabaseError::AppPath("无法冻结本次持仓快照".into()))?;
         let holdings = database.list_market_securities_for_holdings()?;
         let holding_snapshot = Self::fetch_holding_snapshot(&holdings);

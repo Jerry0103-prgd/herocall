@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     database::service::{
         DatabaseError, DatabaseService, HoldingUpdate, NewHolding, NewSecurity,
-        PortfolioHoldingData,
+        PortfolioHoldingData, WatchlistItemData,
     },
     market_service::{MarketService, MarketStatus},
     portfolio_service::{PortfolioService, SecurityType, TradeRule},
@@ -71,7 +71,6 @@ pub enum PortfolioUiError {
     Validation(&'static str),
     ExistingHolding,
     MissingHolding,
-    NotWatchlist,
 }
 
 impl fmt::Display for PortfolioUiError {
@@ -81,7 +80,6 @@ impl fmt::Display for PortfolioUiError {
             Self::Validation(message) => formatter.write_str(message),
             Self::ExistingHolding => formatter.write_str("该证券已在我的关注中"),
             Self::MissingHolding => formatter.write_str("未找到该持仓"),
-            Self::NotWatchlist => formatter.write_str("历史持仓记录不能通过我的关注删除"),
         }
     }
 }
@@ -102,6 +100,16 @@ impl PortfolioUiService {
             .list_portfolio_holding_data()?
             .into_iter()
             .map(Self::to_view)
+            .collect()
+    }
+
+    pub fn list_watchlist(
+        database: &DatabaseService,
+    ) -> Result<Vec<PortfolioHoldingView>, PortfolioUiError> {
+        database
+            .list_watchlist_item_data()?
+            .into_iter()
+            .map(Self::watchlist_view)
             .collect()
     }
 
@@ -157,6 +165,7 @@ impl PortfolioUiService {
             position_source: "MANUAL".into(),
             as_of_date: None,
         })?;
+        database.ensure_watchlist_item(security.id)?;
         Self::list(database)?
             .into_iter()
             .find(|view| view.holding_id == holding.id)
@@ -170,7 +179,6 @@ impl PortfolioUiService {
         input: CreateWatchlistInput,
     ) -> Result<PortfolioHoldingView, PortfolioUiError> {
         let parsed = ParsedWatchlistInput::parse(input)?;
-        let account = database.get_or_create_local_holding_account()?;
         let security =
             match database.find_security_by_symbol_and_market(&parsed.symbol, &parsed.market)? {
                 Some(security) => database.update_security_for_portfolio(
@@ -191,26 +199,15 @@ impl PortfolioUiService {
                 })?,
             };
         if database
-            .find_holding_by_account_and_security(account.id, security.id)?
+            .find_watchlist_item_by_security(security.id)?
             .is_some()
         {
             return Err(PortfolioUiError::ExistingHolding);
         }
 
-        let holding = database.create_holding(NewHolding {
-            cash_account_id: account.id,
-            security_id: security.id,
-            quantity: 0,
-            available_quantity: 0,
-            average_cost: "0".into(),
-            cost_amount: "0".into(),
-            position_source: "MANUAL".into(),
-            as_of_date: None,
-        })?;
-        Self::list(database)?
-            .into_iter()
-            .find(|view| view.holding_id == holding.id)
-            .ok_or(PortfolioUiError::MissingHolding)
+        Ok(Self::watchlist_view(
+            database.create_watchlist_item(security.id)?,
+        )?)
     }
 
     pub fn update(
@@ -275,18 +272,30 @@ impl PortfolioUiService {
         database: &DatabaseService,
         holding_id: i64,
     ) -> Result<(), PortfolioUiError> {
-        let holding = database
-            .get_holding(holding_id)
-            .map_err(|error| match error {
-                DatabaseError::Sqlite(rusqlite::Error::QueryReturnedNoRows) => {
-                    PortfolioUiError::MissingHolding
-                }
-                other => PortfolioUiError::Database(other),
-            })?;
-        if holding.quantity != 0 {
-            return Err(PortfolioUiError::NotWatchlist);
+        if database.delete_watchlist_item(holding_id)? == 0 {
+            return Err(PortfolioUiError::MissingHolding);
         }
-        Self::delete(database, holding_id)
+        Ok(())
+    }
+
+    fn watchlist_view(data: WatchlistItemData) -> Result<PortfolioHoldingView, PortfolioUiError> {
+        Ok(PortfolioHoldingView {
+            holding_id: data.watchlist_item_id,
+            name: data.name,
+            symbol: data.symbol,
+            market: data.market,
+            security_type: data.security_type,
+            quantity: "0".into(),
+            available_quantity: None,
+            average_cost: "0".into(),
+            current_price: None,
+            market_value: None,
+            daily_pnl: None,
+            total_pnl: None,
+            change_percent: None,
+            transaction_status: "关注标的".into(),
+            is_watchlist: true,
+        })
     }
 
     fn to_view(data: PortfolioHoldingData) -> Result<PortfolioHoldingView, PortfolioUiError> {
@@ -564,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn watchlist_uses_a_zero_position_without_generating_financial_data() {
+    fn watchlist_uses_no_position_or_financial_data() {
         let database = DatabaseService::open_in_memory().expect("initialize database");
         let created = PortfolioUiService::create_watchlist(
             &database,
@@ -598,20 +607,52 @@ mod tests {
     }
 
     #[test]
-    fn watchlist_delete_preserves_an_existing_position() {
+    fn cancelling_a_follow_preserves_an_existing_position() {
         let database = DatabaseService::open_in_memory().expect("initialize database");
         let existing =
             PortfolioUiService::create(&database, create_input()).expect("create holding");
 
-        assert!(matches!(
-            PortfolioUiService::delete_watchlist(&database, existing.holding_id),
-            Err(PortfolioUiError::NotWatchlist)
-        ));
+        let follow = PortfolioUiService::list_watchlist(&database)
+            .expect("read created follow")
+            .into_iter()
+            .find(|item| item.symbol == existing.symbol)
+            .expect("created follow");
+        PortfolioUiService::delete_watchlist(&database, follow.holding_id)
+            .expect("cancel follow without deleting position");
         assert_eq!(
-            PortfolioUiService::list(&database)
-                .expect("list holdings")
+            database
+                .list_portfolio_holding_data()
+                .expect("existing position remains")
                 .len(),
             1
         );
+        assert!(PortfolioUiService::list_watchlist(&database)
+            .expect("follow is removed")
+            .is_empty());
+    }
+
+    #[test]
+    fn newest_follow_is_listed_first() {
+        let database = DatabaseService::open_in_memory().expect("initialize database");
+        PortfolioUiService::create_watchlist(
+            &database,
+            CreateWatchlistInput {
+                symbol: "600330".into(),
+                name: "先添加".into(),
+            },
+        )
+        .expect("first follow");
+        PortfolioUiService::create_watchlist(
+            &database,
+            CreateWatchlistInput {
+                symbol: "300209".into(),
+                name: "后添加".into(),
+            },
+        )
+        .expect("second follow");
+
+        let follows = PortfolioUiService::list_watchlist(&database).expect("list follows");
+        assert_eq!(follows[0].symbol, "300209");
+        assert_eq!(follows[1].symbol, "600330");
     }
 }

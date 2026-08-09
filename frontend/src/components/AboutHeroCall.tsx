@@ -7,6 +7,19 @@ type ReleaseNote = {
 
 const releaseNotes: ReleaseNote[] = [
   {
+    version: "V1.0.3",
+    date: "2026-08-09",
+    summary: "关注管理与 AI 投研复盘升级",
+    groups: [
+      { title: "更新", items: [
+        "优化关注标的管理",
+        "支持完整取消关注",
+        "升级AI复盘报告结构",
+        "优化投研分析展示体验",
+      ] },
+    ],
+  },
+  {
     version: "V1.0.2",
     date: "2026-08-09",
     summary: "体验优化版本",

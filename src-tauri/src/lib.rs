@@ -85,7 +85,7 @@ fn refresh_tushare_market_data(app: tauri::AppHandle) -> Result<MarketRefreshVie
 fn get_portfolio_holdings(app: tauri::AppHandle) -> Result<Vec<PortfolioHoldingView>, String> {
     let database = database::service::DatabaseService::open_app_database(&app)
         .map_err(|error| error.to_string())?;
-    PortfolioUiService::list(&database).map_err(|error| error.to_string())
+    PortfolioUiService::list_watchlist(&database).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
