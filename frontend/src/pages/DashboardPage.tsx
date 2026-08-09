@@ -1,30 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { MarketIndexCard } from "../components/MarketIndexCard";
-import { MetricCard } from "../components/MetricCard";
 import { DataStatusCard, type DataStatusTone } from "../components/DataStatusCard";
 import { loadDeepSeekStatus, type DeepSeekStatus } from "../services/ai";
 import {
-  emptyAssetSummary,
-  loadAssetSummary,
   loadDashboardDataStatus,
   loadMarketSnapshot,
   noDataMarketSnapshot,
   refreshTodayMarketSnapshot,
-  type AssetSummary,
   type DashboardDataStatus,
   type DataSectionStatus,
   type MarketIndexQuote,
 } from "../services/dashboard";
-
-const metrics = [
-  ["总资产", "totalAssets"],
-  ["股票市值", "stockMarketValue"],
-  ["现金", "cash"],
-  ["今日盈亏", "dailyPnl"],
-  ["总盈亏", "totalPnl"],
-  ["收益率", "returnRate"],
-] as const;
 
 const noDataSection: DataSectionStatus = {
   status: "NO_DATA",
@@ -49,7 +36,6 @@ function sectionTone(section: DataSectionStatus): DataStatusTone {
 }
 
 export function DashboardPage() {
-  const [summary, setSummary] = useState<AssetSummary>(emptyAssetSummary);
   const [indices, setIndices] = useState<MarketIndexQuote[]>(noDataMarketSnapshot);
   const [dataStatus, setDataStatus] = useState<DashboardDataStatus>(noDataStatus);
   const [dataStatusFailed, setDataStatusFailed] = useState(false);
@@ -59,13 +45,11 @@ export function DashboardPage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const loadDashboard = useCallback(async () => {
-    const [summaryResult, marketResult, dataStatusResult, deepSeekResult] = await Promise.allSettled([
-      loadAssetSummary(),
+    const [marketResult, dataStatusResult, deepSeekResult] = await Promise.allSettled([
       loadMarketSnapshot(),
       loadDashboardDataStatus(),
       loadDeepSeekStatus(),
     ]);
-    if (summaryResult.status === "fulfilled") setSummary(summaryResult.value);
     if (marketResult.status === "fulfilled") setIndices(marketResult.value);
     if (dataStatusResult.status === "fulfilled") {
       setDataStatus(dataStatusResult.value);
@@ -79,7 +63,7 @@ export function DashboardPage() {
     } else {
       setDeepSeekStatusFailed(true);
     }
-    if (summaryResult.status === "rejected" || marketResult.status === "rejected") {
+    if (marketResult.status === "rejected") {
       setConnectionNotice("本地服务暂未返回可验证数据");
     }
   }, []);
@@ -94,7 +78,7 @@ export function DashboardPage() {
       const result = await refreshTodayMarketSnapshot();
       const holdingsMessage = result.holdings.status === "NO_DATA"
         ? (result.holdings.message ?? "暂无可验证持仓行情")
-        : `持仓 ${result.holdings.quoteCount} 条（${result.holdings.source} · ${result.holdings.status}）`;
+        : `关注标的行情 ${result.holdings.quoteCount} 条（${result.holdings.source} · ${result.holdings.status}）`;
       const indicesMessage = result.indices.status === "NO_DATA"
         ? "指数暂无数据"
         : `指数 ${result.indices.itemCount} 条（${result.indices.source} · ${result.indices.status}）`;
@@ -118,7 +102,7 @@ export function DashboardPage() {
         <div>
           <p className="eyebrow">Portfolio overview</p>
           <h1 id="dashboard-title">今日总览</h1>
-          <p>本地资产与市场快照。仅展示可追溯、已验证的数据。</p>
+          <p>关注标的与市场快照。仅展示可追溯、已验证的数据。</p>
         </div>
         <div className="dashboard-actions"><span className="readonly-badge">只读模式</span><button className="secondary-button" disabled={isRefreshing} onClick={() => void refreshMarketData()} type="button">{isRefreshing ? "正在更新…" : "更新今日市场快照"}</button></div>
       </header>
@@ -148,18 +132,6 @@ export function DashboardPage() {
           <DataStatusCard title="AI复盘" tone={deepSeekStatusFailed ? "failed" : deepSeekStatus?.status === "已配置" ? "success" : "empty"} headline={deepSeekStatusFailed ? "配置状态读取失败" : deepSeekStatus?.status === "已配置" ? "DeepSeek 已配置" : "未配置"}>
             {!deepSeekStatusFailed ? <div><dt>服务</dt><dd>DeepSeek</dd></div> : null}
           </DataStatusCard>
-        </div>
-      </section>
-
-      <section aria-label="资产摘要">
-        <div className="section-heading">
-          <div><p className="section-kicker">资产</p><h2>资产摘要</h2></div>
-          <span>估值数据：{summary.valuationSource ?? "暂无数据"}{summary.valuationTimestamp ? ` · ${summary.valuationTimestamp}` : ""}</span>
-        </div>
-        <div className="metric-grid">
-          {metrics.map(([label, key]) => (
-            <MetricCard key={key} label={label} value={summary[key]} />
-          ))}
         </div>
       </section>
 

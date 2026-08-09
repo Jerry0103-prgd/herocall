@@ -1,6 +1,6 @@
 :root {
-  color: #e9eef9;
-  background: #08111f;
+  color: #dce5ef;
+  background: #0f172a;
   font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   font-synthesis: none;
 }
@@ -11,21 +11,21 @@ body { min-width: 900px; min-height: 100vh; margin: 0; }
 
 button { font: inherit; }
 
-.app-shell { display: grid; grid-template-columns: 240px minmax(0, 1fr); min-height: 100vh; background: #0b1423; }
+.app-shell { display: grid; grid-template-columns: 240px minmax(0, 1fr); min-height: 100vh; background: #111a2b; }
 
-.sidebar { display: flex; flex-direction: column; min-height: 100vh; padding: 28px 16px 20px; border-right: 1px solid #233149; background: #0b1220; }
+.sidebar { display: flex; flex-direction: column; min-height: 100vh; padding: 30px 16px 22px; border-right: 1px solid #26364d; background: #101827; }
 
-.brand { display: flex; align-items: center; gap: 11px; padding: 0 12px 28px; }
-.brand-mark { display: grid; width: 33px; height: 33px; place-items: center; overflow: hidden; border-radius: 10px; background: #182337; }
+.brand { display: flex; align-items: center; gap: 12px; padding: 0 12px 30px; }
+.brand-mark { display: grid; width: 36px; height: 36px; place-items: center; overflow: hidden; border: 1px solid #34465f; border-radius: 11px; background: #182337; }
 .brand-mark img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .brand strong, .brand span { display: block; }
 .brand strong { font-size: 15px; letter-spacing: .02em; }
 .brand div span { margin-top: 2px; color: #8291aa; font-size: 11px; letter-spacing: .04em; }
 
-.navigation { display: grid; gap: 6px; }
-.navigation-item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 12px; border: 0; border-radius: 8px; background: transparent; color: #9dabc0; cursor: pointer; text-align: left; transition: background .15s ease, color .15s ease; }
-.navigation-item:hover { background: #142037; color: #f3f7ff; }
-.navigation-item.is-active { background: #1b3950; color: #dffcf1; font-weight: 700; }
+.navigation { display: grid; gap: 8px; }
+.navigation-item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: #9eafc4; cursor: pointer; text-align: left; transition: border-color .15s ease, background .15s ease, color .15s ease; }
+.navigation-item:hover { border-color: #2b3c55; background: #172338; color: #e6edf5; }
+.navigation-item.is-active { border-color: #315d62; background: #18323b; color: #d9f6eb; font-weight: 700; }
 .navigation-symbol { width: 16px; color: #62dcb0; font-size: 16px; text-align: center; }
 .sidebar-note { margin: auto 12px 0; color: #607089; font-size: 12px; line-height: 1.6; }
 
@@ -249,6 +249,55 @@ tbody tr:hover { background: #142138; }
 .first-run-source-status { display: flex; align-items: center; justify-content: space-between; margin-top: 22px; padding: 16px; border: 1px solid #2d415b; border-radius: 9px; color: #d7e2ed; font-size: 13px; }
 .first-run-source-status strong { padding: 5px 9px; border: 1px solid #56647a; border-radius: 999px; color: #bac7d6; font-size: 12px; }
 .first-run-source-status .is-configured { border-color: #4cae91; color: #80e0bc; }
+
+/* V1.0.1 visual system: subdued contrast for long-form research reading. */
+.page { background-color: #111a2b; }
+.dashboard-page, .portfolio-page, .settings-page, .news-page, .review-page, .event-calendar-page {
+  background: radial-gradient(circle at 88% 0%, rgb(45 73 96 / 34%) 0, transparent 32%), #111a2b;
+}
+h1 { color: #f1f5f9; font-size: clamp(30px, 3vw, 40px); font-weight: 720; }
+h2 { color: #e6edf5; font-size: 18px; font-weight: 680; }
+h3, .brand strong { color: #e7edf5; }
+.page-header > div > p:last-child, .section-heading > span, .sidebar-note { color: #8fa0b6; }
+.eyebrow, .section-kicker { color: #78d8b6; letter-spacing: .1em; }
+
+.data-status-card, .metric-card, .index-card, .portfolio-table-card, .holding-form,
+.settings-card, .cash-account-form, .news-state, .news-card, .review-state,
+.review-contribution-list, .event-state, .event-card {
+  border-color: #2b3b53;
+  border-radius: 14px;
+  background: rgb(22 32 49 / 92%);
+  box-shadow: 0 12px 30px rgb(3 8 18 / 18%);
+}
+.data-status-card, .index-card, .news-card, .event-card { padding: 20px; }
+.data-status-card dl, .quote-meta, .news-meta, .review-contribution, .cash-account-row { border-color: #27364c; }
+.data-status-card > p, .metric-card p, .index-heading p, .quote-meta dt, .data-status-card dt,
+.news-meta, .event-card time span, .event-main p, .review-index > span, .review-index small,
+.review-contribution > div span { color: #8798ae; }
+.data-status-card dd, .quote-meta dd, .news-summary, .risk-card ul, .ai-section ul { color: #c2cedc; }
+.data-status-card--success { border-color: #2f665a; }
+.data-status-card--empty { border-color: #3a475a; }
+.data-status-card--failed { border-color: #7a4b56; }
+
+.primary-button, .secondary-button { min-height: 40px; border-radius: 10px; padding: 9px 15px; }
+.primary-button { border-color: #73d7b6; background: #72d6b5; color: #10271f; }
+.secondary-button { border-color: #40546e; background: #162338; color: #ccd8e5; }
+.secondary-button:hover { border-color: #5c7492; background: #1b2a41; }
+.readonly-badge, .status-badge, .settings-status { border-color: #40536b; color: #b2c0d0; }
+
+.watchlist-list { display: grid; }
+.watchlist-item { display: grid; grid-template-columns: minmax(150px, .45fr) minmax(0, 1fr); gap: 24px; align-items: center; min-height: 76px; padding: 18px 22px; border-bottom: 1px solid #27364c; }
+.watchlist-item:last-child { border-bottom: 0; }
+.watchlist-item:hover { background: rgb(35 51 73 / 62%); }
+.watchlist-item strong { color: #e4ebf3; font-size: 15px; font-weight: 620; }
+.watchlist-item .code-cell { color: #9fb1c6; font-size: 13px; }
+
+.review-contribution { grid-template-columns: minmax(180px, 1fr) minmax(150px, .55fr); }
+.review-contribution > span { color: #c5d1de; font-size: 12px; }
+.review-content { gap: 34px; }
+.review-index, .risk-card, .ai-section { padding: 20px; }
+.first-run-progress { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.first-run-wizard { border-color: #385169; background: radial-gradient(circle at 90% 0%, #254156 0, transparent 34%), #172236; }
 
 @media (max-width: 1050px) {
   .data-status-grid { grid-template-columns: 1fr; }

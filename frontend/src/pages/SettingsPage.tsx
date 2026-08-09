@@ -2,17 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 
 import { AboutHeroCall } from "../components/AboutHeroCall";
-import { CashAccountForm } from "../components/CashAccountForm";
 import { loadDeepSeekStatus, removeDeepSeekApiKey, saveDeepSeekApiKey } from "../services/ai";
 import {
-  createCashAccount,
   createDatabaseBackup,
-  loadCashAccounts,
   loadSettingsStatus,
   loadTushareStatus,
   removeTushareToken,
   saveTushareToken,
-  type CashAccount,
   type SettingsStatus,
 } from "../services/settings";
 
@@ -22,13 +18,9 @@ function valueOrUnavailable(value: string | null | undefined) {
 
 export function SettingsPage() {
   const [status, setStatus] = useState<SettingsStatus | null>(null);
-  const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isSavingToken, setIsSavingToken] = useState(false);
   const [isRemovingToken, setIsRemovingToken] = useState(false);
-  const [isCashFormOpen, setIsCashFormOpen] = useState(false);
   const [tushareToken, setTushareToken] = useState("");
   const [deepSeekStatus, setDeepSeekStatus] = useState<"已配置" | "未配置" | "未确认">("未确认");
   const [deepSeekKey, setDeepSeekKey] = useState("");
@@ -38,17 +30,13 @@ export function SettingsPage() {
   const [message, setMessage] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    setIsLoading(true);
     try {
-      const [nextStatus, nextAccounts, tokenStatus, nextDeepSeekStatus] = await Promise.all([loadSettingsStatus(), loadCashAccounts(), loadTushareStatus(), loadDeepSeekStatus()]);
+      const [nextStatus, tokenStatus, nextDeepSeekStatus] = await Promise.all([loadSettingsStatus(), loadTushareStatus(), loadDeepSeekStatus()]);
       setStatus({ ...nextStatus, tushareStatus: tokenStatus.status });
       setDeepSeekStatus(nextDeepSeekStatus.status);
-      setCashAccounts(nextAccounts);
       setMessage(null);
     } catch {
       setMessage("本地设置服务暂不可用");
-    } finally {
-      setIsLoading(false);
     }
   }, []);
 
@@ -62,19 +50,6 @@ export function SettingsPage() {
     );
     return () => { isMounted = false; };
   }, []);
-
-  async function saveCashAccount(input: { currency: "CNY"; amount: string }) {
-    setIsSaving(true);
-    try {
-      await createCashAccount(input);
-      setIsCashFormOpen(false);
-      await refresh();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "现金账户保存失败");
-    } finally {
-      setIsSaving(false);
-    }
-  }
 
   async function backup() {
     setIsBackingUp(true);
@@ -147,7 +122,7 @@ export function SettingsPage() {
         <div>
           <p className="eyebrow">System configuration</p>
           <h1 id="settings-title">设置</h1>
-          <p>本地配置、现金账户与数据库备份；不保存券商权限或交易指令。</p>
+          <p>本地配置、数据源状态与数据库备份；不保存券商权限或交易指令。</p>
         </div>
       </header>
 
@@ -183,16 +158,6 @@ export function SettingsPage() {
             <button className="secondary-button" disabled={isSavingDeepSeek || isRemovingDeepSeek || deepSeekStatus !== "已配置"} onClick={() => void removeDeepSeek()} type="button">{isRemovingDeepSeek ? "正在删除…" : "删除 Key"}</button>
           </div>
         </form>
-      </section>
-
-      <section className="settings-section" aria-labelledby="cash-title">
-        <div className="section-heading"><div><p className="section-kicker">Cash</p><h2 id="cash-title">现金管理</h2></div><button className="primary-button" onClick={() => setIsCashFormOpen(true)} type="button">新增现金账户</button></div>
-        {isCashFormOpen ? <CashAccountForm isSaving={isSaving} onCancel={() => setIsCashFormOpen(false)} onSubmit={saveCashAccount} /> : null}
-        <div className="settings-card cash-accounts-card">
-          {isLoading ? <p className="table-state">正在读取本地现金账户…</p> : null}
-          {!isLoading && cashAccounts.length === 0 ? <p className="table-state">暂无现金账户</p> : null}
-          {!isLoading && cashAccounts.length > 0 ? <div className="cash-account-list">{cashAccounts.map((account) => <div className="cash-account-row" key={account.id}><span>{account.name}</span><span>{account.currency}</span><strong>{account.amount}</strong></div>)}</div> : null}
-        </div>
       </section>
 
       <section className="settings-section" aria-labelledby="system-status-title">
