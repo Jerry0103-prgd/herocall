@@ -363,6 +363,9 @@ mod tests {
                 as_of_date: None,
             })
             .expect("create holding");
+        database
+            .create_watchlist_item(security.id)
+            .expect("create explicit follow");
         security.id
     }
 

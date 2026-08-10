@@ -72,6 +72,6 @@ export function deletePortfolioHolding(holdingId: number): Promise<void> {
   return invoke<void>("delete_portfolio_holding", { holdingId });
 }
 
-export function deleteWatchlistItem(securityId: number): Promise<void> {
-  return invoke<void>("delete_watchlist_item", { securityId });
+export function deleteWatchlistItem(watchlistItemId: number, securityId: number): Promise<void> {
+  return invoke<void>("delete_watchlist_item", { input: { watchlistItemId, securityId } });
 }

@@ -1150,14 +1150,18 @@ impl DatabaseService {
             .map_err(Into::into)
     }
 
-    /// Cancels a follow by its stable security identity. A watchlist entry is intentionally
+    /// Cancels a follow by its stable row and security identities. A watchlist entry is intentionally
     /// independent from holdings, transactions, quotes, news, events and AI history, so this
     /// operation never deletes any of those records.
-    pub fn delete_watchlist_item_by_security(&self, security_id: i64) -> DatabaseResult<usize> {
+    pub fn delete_watchlist_item_by_id_and_security(
+        &self,
+        id: i64,
+        security_id: i64,
+    ) -> DatabaseResult<usize> {
         self.connection
             .execute(
-                "DELETE FROM watchlist_items WHERE security_id = ?1",
-                [security_id],
+                "DELETE FROM watchlist_items WHERE id = ?1 AND security_id = ?2",
+                params![id, security_id],
             )
             .map_err(Into::into)
     }
@@ -1423,7 +1427,6 @@ impl DatabaseService {
                 input.as_of_date,
             ],
         )?;
-        self.ensure_watchlist_item(input.security_id)?;
         self.get_holding(self.connection.last_insert_rowid())
     }
 

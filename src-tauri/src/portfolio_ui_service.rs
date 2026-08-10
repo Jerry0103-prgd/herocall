@@ -35,6 +35,15 @@ pub struct CreateWatchlistInput {
     pub security_id: i64,
 }
 
+/// Exact identity for a user-managed follow. Keeping the watchlist row id in the command
+/// contract prevents an unrelated historical position from ever being treated as the follow.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteWatchlistInput {
+    pub watchlist_item_id: i64,
+    pub security_id: i64,
+}
+
 /// A local, source-backed security candidate. This is intentionally limited to persisted
 /// securities so the UI never invents a code/name pairing.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -196,7 +205,6 @@ impl PortfolioUiService {
             position_source: "MANUAL".into(),
             as_of_date: None,
         })?;
-        database.ensure_watchlist_item(security.id)?;
         Self::list(database)?
             .into_iter()
             .find(|view| view.holding_id == holding.id)
@@ -289,17 +297,27 @@ impl PortfolioUiService {
 
     pub fn delete_watchlist(
         database: &DatabaseService,
-        security_id: i64,
+        input: DeleteWatchlistInput,
     ) -> Result<(), PortfolioUiError> {
-        if database.delete_watchlist_item_by_security(security_id)? == 0 {
+        let deleted = database
+            .delete_watchlist_item_by_id_and_security(input.watchlist_item_id, input.security_id)?;
+        eprintln!(
+            "[hero-call][watchlist-diagnostic] delete_watchlist item_id={} security_id={} deleted_rows={}",
+            input.watchlist_item_id, input.security_id, deleted
+        );
+        if deleted == 0 {
             return Err(PortfolioUiError::MissingHolding);
         }
         if database
-            .find_watchlist_item_by_security(security_id)?
+            .find_watchlist_item_by_security(input.security_id)?
             .is_some()
         {
             return Err(PortfolioUiError::Validation("取消关注未能写入本地数据库"));
         }
+        eprintln!(
+            "[hero-call][watchlist-diagnostic] delete_watchlist verified item_id={} security_id={}",
+            input.watchlist_item_id, input.security_id
+        );
         Ok(())
     }
 
@@ -599,8 +617,14 @@ mod tests {
             1
         );
 
-        PortfolioUiService::delete_watchlist(&database, created.security_id)
-            .expect("delete watchlist item");
+        PortfolioUiService::delete_watchlist(
+            &database,
+            DeleteWatchlistInput {
+                watchlist_item_id: created.holding_id,
+                security_id: created.security_id,
+            },
+        )
+        .expect("delete watchlist item");
         assert!(database
             .find_watchlist_item_by_security(created.security_id)
             .expect("verify follow was deleted")
@@ -616,11 +640,13 @@ mod tests {
         let existing =
             PortfolioUiService::create(&database, create_input()).expect("create holding");
 
-        let follow = PortfolioUiService::list_watchlist(&database)
-            .expect("read created follow")
-            .into_iter()
-            .find(|item| item.symbol == existing.symbol)
-            .expect("created follow");
+        let follow = PortfolioUiService::create_watchlist(
+            &database,
+            CreateWatchlistInput {
+                security_id: existing.security_id,
+            },
+        )
+        .expect("explicitly create follow");
         let persisted_holding = database
             .get_holding(existing.holding_id)
             .expect("existing position");
@@ -644,8 +670,14 @@ mod tests {
                 note: None,
             })
             .expect("persist historical transaction");
-        PortfolioUiService::delete_watchlist(&database, follow.security_id)
-            .expect("cancel follow without deleting position");
+        PortfolioUiService::delete_watchlist(
+            &database,
+            DeleteWatchlistInput {
+                watchlist_item_id: follow.holding_id,
+                security_id: follow.security_id,
+            },
+        )
+        .expect("cancel follow without deleting position");
         assert_eq!(
             database
                 .list_portfolio_holding_data()
@@ -658,6 +690,24 @@ mod tests {
             .expect("historical transaction remains"));
         assert!(PortfolioUiService::list_watchlist(&database)
             .expect("follow is removed")
+            .is_empty());
+    }
+
+    #[test]
+    fn creating_a_holding_does_not_implicitly_follow_the_security() {
+        let database = DatabaseService::open_in_memory().expect("initialize database");
+        let created =
+            PortfolioUiService::create(&database, create_input()).expect("create holding record");
+
+        assert!(
+            database
+                .get_holding(created.holding_id)
+                .expect("historical holding remains")
+                .id
+                > 0
+        );
+        assert!(PortfolioUiService::list_watchlist(&database)
+            .expect("read explicit watchlist")
             .is_empty());
     }
 

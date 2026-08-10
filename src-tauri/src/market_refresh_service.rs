@@ -428,6 +428,9 @@ mod tests {
                 as_of_date: Some("2026-08-07".into()),
             })
             .expect("create holding");
+        database
+            .create_watchlist_item(security.id)
+            .expect("create explicit follow");
 
         let snapshot = MarketRefreshService::refresh_with_adapter(&database, &RecordedAdapter)
             .expect("refresh and persist");

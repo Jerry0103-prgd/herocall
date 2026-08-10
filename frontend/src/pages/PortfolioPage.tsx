@@ -52,7 +52,7 @@ export function PortfolioPage() {
     // authoritative; an error restores it instead of silently pretending deletion succeeded.
     setHoldings((current) => current.filter((item) => item.securityId !== holding.securityId));
     try {
-      await deleteWatchlistItem(holding.securityId);
+      await deleteWatchlistItem(holding.holdingId, holding.securityId);
       const persisted = await loadPortfolioHoldings();
       if (persisted.some((item) => item.securityId === holding.securityId)) {
         throw new Error("取消关注未确认，请重新打开页面后重试");

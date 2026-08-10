@@ -27,8 +27,8 @@ use initialization_service::{InitializationService, InitializationStatusView};
 use market_refresh_service::{ManualMarketSnapshotView, MarketRefreshService, MarketRefreshView};
 use news_service::{HoldingNewsView, NewsService};
 use portfolio_ui_service::{
-    CreateHoldingInput, CreateWatchlistInput, PortfolioHoldingView, PortfolioUiService,
-    SecurityLookupView, UpdateHoldingInput,
+    CreateHoldingInput, CreateWatchlistInput, DeleteWatchlistInput, PortfolioHoldingView,
+    PortfolioUiService, SecurityLookupView, UpdateHoldingInput,
 };
 use review_service::{DailyReviewView, ReviewService};
 use secure_storage::{
@@ -140,10 +140,14 @@ fn delete_portfolio_holding(app: tauri::AppHandle, holding_id: i64) -> Result<()
 }
 
 #[tauri::command]
-fn delete_watchlist_item(app: tauri::AppHandle, security_id: i64) -> Result<(), String> {
+fn delete_watchlist_item(app: tauri::AppHandle, input: DeleteWatchlistInput) -> Result<(), String> {
+    eprintln!(
+        "[hero-call][watchlist-diagnostic] delete_watchlist command item_id={} security_id={}",
+        input.watchlist_item_id, input.security_id
+    );
     let database = database::service::DatabaseService::open_app_database(&app)
         .map_err(|error| error.to_string())?;
-    PortfolioUiService::delete_watchlist(&database, security_id).map_err(|error| error.to_string())
+    PortfolioUiService::delete_watchlist(&database, input).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

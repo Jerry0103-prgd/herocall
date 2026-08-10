@@ -333,11 +333,15 @@ mod tests {
             },
         )
         .expect("create test holding");
-        database
+        let security_id = database
             .find_security_by_symbol_and_market(symbol, "SSE")
             .expect("find security")
             .expect("security exists")
-            .id
+            .id;
+        database
+            .create_watchlist_item(security_id)
+            .expect("create explicit follow");
+        security_id
     }
 
     #[test]
