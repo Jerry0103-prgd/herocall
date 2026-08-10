@@ -31,12 +31,12 @@
 | `manual_refresh_events` | `manual_refresh_run_id`, `event_id` | 本次手动快照实际采集并保存的持仓关联事件；用于冻结 AI Context 的事件边界 |
 | `ai_review_contexts` | `id`, `review_id`, `manual_refresh_run_id`, `portfolio_json`, `market_json`, `news_json`, `events_json`, `created_at` | 一次成功 AI 调用的审计输入快照；不保存 API Key 或提示词全文 |
 | `ai_reviews` | `id`, `review_id`, `context_id`, `provider`, `model`, `prompt_version`, `request_status`, `facts`, `inferences`, `risks`, `report_json`, `created_at` | 对已保存每日复盘的 AI 辅助解释；原三段内容为安全审计记录，`report_json` 保存 V1.0.3 七项投研报告字段，均须经结构与禁止词校验后才可落库 |
-| `ai_provider_settings` | `provider`, `model`, `enabled`, `priority`, `updated_at` | 非敏感 AI Provider 偏好；仅保存启用状态、模型与调用优先级，API Key 仅存 macOS Keychain |
+| `ai_provider_settings` | `provider`, `endpoint`, `model_id`, `enabled`, `priority`, `updated_at` | 非敏感 AI Provider 偏好；仅保存端点、模型 ID、启用状态与调用优先级，API Key 仅存 macOS Keychain |
 | `events` | `id`, `event_type`, `title`, `security_id`, `event_time`, `timezone`, `source`, `source_url`, `status`, `created_at` | 投资事件日历正文；可通过 `event_security_links` 关联多个证券，保留来源、原始带时区时间及确认状态 |
 | `event_security_links` | `event_id`, `security_id` | 事件与证券的多对多关联；删除一只关注标的时保护其他证券仍需的事件正文 |
 | `app_settings` | `setting_key`, `setting_value`, `updated_at` | 非敏感应用状态；V0.8.1 仅保存首次启动完成标志，禁止存储 API Key、Token 或券商信息 |
 
-`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）至 `019`（指数日内字段）；迁移重复执行不会重新执行已应用版本，已应用迁移的校验标识不匹配会阻止继续启动。
+`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）至 `020`（AI Provider 模型配置）；迁移重复执行不会重新执行已应用版本，已应用迁移的校验标识不匹配会阻止继续启动。
 
 ## 3. 延后实现的逻辑实体
 
@@ -55,7 +55,7 @@
 - `news_articles` 强制要求标题、来源、来源类型、发布时间、抓取时间、摘要和 HTTP(S) 原文地址；原文地址唯一。迁移 `017` 以 `news_security_links` 支持共享关联，资讯页只返回仍关联当前关注标的的记录。
 - `daily_reviews.review_date` 唯一；同一日期重新生成时原子更新四个摘要和关联快照，绝不生成第二条同日复盘。快照删除时复盘保留但 `snapshot_id` 设为空，以保留生成时的结构化事实和“未确认”状态。
 - `ai_reviews` 使用外键关联 `daily_reviews`，每日复盘删除时其 AI 辅助解释一并删除；`context_id` 关联冻结的 `ai_review_contexts`，后者再关联一次 `manual_refresh_runs`。迁移 `014` 新增可空 `report_json`，迁移 `016` 新增可空 `security_id`；新复盘一条记录仅对应一只关注证券。新记录必须同时保存七项报告与 `FACTS`、`INFERENCES`、`RISKS` 审计内容。运行时 API Key 不进入此表或其他 SQLite 表。
-- `ai_provider_settings` 由迁移 `015` 初始化模型、优先级与启用状态；迁移 `018` 将旧 `TENCENT_HUNYUAN` 偏好迁移为 `TENCENT_TOKENHUB`，模型固定为 `hunyuan-turbos-latest`。旧腾讯混元 Keychain 项保留但不被 TokenHub 读取；TokenHub Key 只存新的 macOS Keychain 项。运行时只选择优先级最高且同时“已开启/已配置”的一个 Provider，绝不自动并行调用多个模型。
+- `ai_provider_settings` 由迁移 `015` 初始化模型、优先级与启用状态；迁移 `018` 将旧 `TENCENT_HUNYUAN` 偏好迁移为 `TENCENT_TOKENHUB`。迁移 `020` 增加非敏感的 `endpoint` 与 `model_id`，并将 TokenHub 默认模型更新为 `hy3`。旧腾讯混元 Keychain 项保留但不被 TokenHub 读取；TokenHub Key 只存新的 macOS Keychain 项。运行时只选择优先级最高且同时“已启用/已配置”的一个 Provider，绝不自动并行调用多个模型。
 - `events.event_type` 支持 `EARNINGS`、`COMPANY_ANNOUNCEMENT`、`MAJOR_MATTER`、`DIVIDEND`、`EX_DIVIDEND`、`SHAREHOLDER_MEETING`、`MACRO_DATA`、`FED_MEETING`；`status` 仅允许 `CONFIRMED`、`UNCONFIRMED`、`ARCHIVED`。迁移 `017` 以 `event_security_links` 支持共享关联；查询先标识当前关注关联事件，再按解析后的原始带时区时间排序，不推断日期或状态。
 
 - V1.0.7 的“确认删除关注”是用户确认后的不可恢复操作。Rust `remove_followed_security_completely` 在单一 SQLite transaction 中删除目标证券的关注关系、持仓/交易、个股行情、公司行动、独有资讯/事件、逐证券 AI 复盘与独有 AI Context，并最终删除证券记录；任一步失败即 rollback。市场指数快照、数据源、现金账户、每日全局复盘及仍被其他证券关联的资讯/事件不会被删除。

@@ -36,6 +36,7 @@ export type AiProviderConfig = {
   provider: "DEEPSEEK" | "TENCENT_TOKENHUB" | "DOUBAO";
   displayName: string;
   model: string;
+  endpoint: string;
   configured: boolean;
   enabled: boolean;
   isCurrent: boolean;

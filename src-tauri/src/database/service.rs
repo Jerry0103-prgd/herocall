@@ -298,6 +298,9 @@ pub struct NewAiReview {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AiProviderSetting {
     pub provider: String,
+    pub endpoint: String,
+    pub model_id: String,
+    /// Compatibility alias retained for existing stored AI review metadata and IPC consumers.
     pub model: String,
     pub enabled: bool,
     pub priority: i64,
@@ -898,14 +901,16 @@ impl DatabaseService {
 
     pub fn list_ai_provider_settings(&self) -> DatabaseResult<Vec<AiProviderSetting>> {
         let mut statement = self.connection.prepare(
-            "SELECT provider, model, enabled, priority FROM ai_provider_settings ORDER BY priority ASC",
+            "SELECT provider, endpoint, model_id, model, enabled, priority FROM ai_provider_settings ORDER BY priority ASC",
         )?;
         let rows = statement.query_map([], |row| {
             Ok(AiProviderSetting {
                 provider: row.get(0)?,
-                model: row.get(1)?,
-                enabled: row.get::<_, i64>(2)? != 0,
-                priority: row.get(3)?,
+                endpoint: row.get(1)?,
+                model_id: row.get(2)?,
+                model: row.get(3)?,
+                enabled: row.get::<_, i64>(4)? != 0,
+                priority: row.get(5)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -2511,7 +2516,7 @@ mod tests {
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 19);
+        assert_eq!(migration_count, 20);
         assert_eq!(table_count, 21);
     }
 
@@ -3030,7 +3035,7 @@ mod tests {
             })
             .expect("verify provider settings migration");
 
-        assert_eq!(migration_count, 19);
+        assert_eq!(migration_count, 20);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -3102,7 +3107,7 @@ mod tests {
             })
             .expect("read migration count");
         assert_eq!(quote, ("000001.SH".into(), "1.25".into(), "1.25".into()));
-        assert_eq!(migration_count, 19);
+        assert_eq!(migration_count, 20);
 
         let database = DatabaseService { connection };
         let records = database
@@ -3220,12 +3225,7 @@ mod tests {
             providers,
             vec![
                 ("DEEPSEEK".into(), "deepseek-chat".into(), 1, 1),
-                (
-                    "TENCENT_TOKENHUB".into(),
-                    "hunyuan-turbos-latest".into(),
-                    1,
-                    2,
-                ),
+                ("TENCENT_TOKENHUB".into(), "hy3".into(), 1, 2,),
                 ("DOUBAO".into(), "doubao-seed-1-6-250615".into(), 0, 3),
             ]
         );
@@ -3234,7 +3234,7 @@ mod tests {
                 row.get(0)
             })
             .expect("read migration count");
-        assert_eq!(migration_count, 19);
+        assert_eq!(migration_count, 20);
     }
 
     #[test]
@@ -3305,7 +3305,7 @@ mod tests {
                 row.get(0)
             })
             .expect("read migration count");
-        assert_eq!(migration_count, 19);
+        assert_eq!(migration_count, 20);
     }
 
     #[test]

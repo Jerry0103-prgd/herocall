@@ -7,6 +7,21 @@ type ReleaseNote = {
 
 const releaseNotes: ReleaseNote[] = [
   {
+    version: "V1.0.9",
+    date: "2026-08-10",
+    summary: "TokenHub 模型配置与连接验证优化",
+    groups: [
+      { title: "修复", items: [
+        "腾讯混元（TokenHub）默认模型切换为 hy3",
+        "连接测试改为验证 API Key、端点和模型实际响应",
+      ] },
+      { title: "优化", items: [
+        "AI Provider 配置展示当前模型 ID 与 OpenAI 兼容接口",
+        "Provider 运行时从本地非敏感配置读取 endpoint 和 model_id",
+      ] },
+    ],
+  },
+  {
     version: "V1.0.8",
     date: "2026-08-10",
     summary: "市场快照与投研信息密度优化",
