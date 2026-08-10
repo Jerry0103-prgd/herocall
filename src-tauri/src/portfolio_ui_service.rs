@@ -294,6 +294,12 @@ impl PortfolioUiService {
         if database.delete_watchlist_item_by_security(security_id)? == 0 {
             return Err(PortfolioUiError::MissingHolding);
         }
+        if database
+            .find_watchlist_item_by_security(security_id)?
+            .is_some()
+        {
+            return Err(PortfolioUiError::Validation("取消关注未能写入本地数据库"));
+        }
         Ok(())
     }
 
@@ -595,6 +601,10 @@ mod tests {
 
         PortfolioUiService::delete_watchlist(&database, created.security_id)
             .expect("delete watchlist item");
+        assert!(database
+            .find_watchlist_item_by_security(created.security_id)
+            .expect("verify follow was deleted")
+            .is_none());
         assert!(PortfolioUiService::list(&database)
             .expect("list watchlist")
             .is_empty());

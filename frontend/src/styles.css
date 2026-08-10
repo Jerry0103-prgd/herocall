@@ -342,6 +342,7 @@ h3, .brand strong { color: #e7edf5; }
 .watchlist-item .code-cell { color: #9fb1c6; font-size: 13px; }
 .watchlist-remove-button { padding: 0; border: 0; background: transparent; color: #d8969c; cursor: pointer; font-size: 12px; }
 .watchlist-remove-button:hover { color: #f0b2b7; }
+.watchlist-remove-button:disabled { color: #8090a4; cursor: wait; }
 .watchlist-form-intro { margin: 0 0 18px; color: #9baec2; font-size: 13px; line-height: 1.6; }
 .watchlist-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .watchlist-selection, .watchlist-lookup-message { margin: 14px 0 0; color: #92a6bd; font-size: 12px; }
