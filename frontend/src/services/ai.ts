@@ -33,13 +33,21 @@ export type AiResearchReport = {
 export type DeepSeekStatus = { status: "已配置" | "未配置" };
 
 export type AiProviderConfig = {
-  provider: "DEEPSEEK" | "TENCENT_HUNYUAN" | "DOUBAO";
+  provider: "DEEPSEEK" | "TENCENT_TOKENHUB" | "DOUBAO";
   displayName: string;
   model: string;
   configured: boolean;
   enabled: boolean;
   isCurrent: boolean;
   priority: number;
+};
+
+export type AiProviderConnectionTest = {
+  provider: AiProviderConfig["provider"];
+  model: string;
+  success: boolean;
+  httpStatus: number | null;
+  message: string;
 };
 
 export function loadDeepSeekStatus(): Promise<DeepSeekStatus> {
@@ -80,6 +88,10 @@ export function removeAiProviderApiKey(provider: AiProviderConfig["provider"]): 
 
 export function setAiProviderEnabled(provider: AiProviderConfig["provider"], enabled: boolean): Promise<AiProviderConfig[]> {
   return invoke<AiProviderConfig[]>("set_ai_provider_enabled", { provider, enabled });
+}
+
+export function testAiProviderConnection(provider: AiProviderConfig["provider"]): Promise<AiProviderConnectionTest> {
+  return invoke<AiProviderConnectionTest>("test_ai_provider_connection", { provider });
 }
 
 export function generateAiReviews(reviewDate: string): Promise<AiReview[]> {

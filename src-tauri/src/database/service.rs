@@ -2464,7 +2464,7 @@ mod tests {
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 17);
+        assert_eq!(migration_count, 18);
         assert_eq!(table_count, 21);
     }
 
@@ -2983,7 +2983,7 @@ mod tests {
             })
             .expect("verify provider settings migration");
 
-        assert_eq!(migration_count, 17);
+        assert_eq!(migration_count, 18);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -3055,7 +3055,7 @@ mod tests {
             })
             .expect("read migration count");
         assert_eq!(quote, ("000001.SH".into(), "1.25".into(), "1.25".into()));
-        assert_eq!(migration_count, 17);
+        assert_eq!(migration_count, 18);
 
         let database = DatabaseService { connection };
         let records = database
@@ -3138,6 +3138,56 @@ mod tests {
             |row| Ok((row.get(0)?, row.get(1)?)),
         ).expect("read backfilled links");
         assert_eq!(links, (1, 1));
+    }
+
+    #[test]
+    fn migration_018_migrates_tencent_preference_without_losing_other_provider_settings() {
+        let mut connection = Connection::open_in_memory().expect("create pre-018 database");
+        migrations::apply_017_for_upgrade_test(&mut connection)
+            .expect("apply migrations through 017");
+        connection
+            .execute(
+                "UPDATE ai_provider_settings SET enabled = 1 WHERE provider = 'TENCENT_HUNYUAN'",
+                [],
+            )
+            .expect("enable legacy Tencent preference");
+
+        migrations::apply(&mut connection).expect("upgrade through 018");
+        migrations::apply(&mut connection).expect("reapply 018 idempotently");
+
+        let providers: Vec<(String, String, i64, i64)> = {
+            let mut statement = connection
+                .prepare(
+                    "SELECT provider, model, enabled, priority FROM ai_provider_settings ORDER BY priority",
+                )
+                .expect("query migrated providers");
+            statement
+                .query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })
+                .expect("read providers")
+                .collect::<Result<_, _>>()
+                .expect("collect providers")
+        };
+        assert_eq!(
+            providers,
+            vec![
+                ("DEEPSEEK".into(), "deepseek-chat".into(), 1, 1),
+                (
+                    "TENCENT_TOKENHUB".into(),
+                    "hunyuan-turbos-latest".into(),
+                    1,
+                    2,
+                ),
+                ("DOUBAO".into(), "doubao-seed-1-6-250615".into(), 0, 3),
+            ]
+        );
+        let migration_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .expect("read migration count");
+        assert_eq!(migration_count, 18);
     }
 
     #[test]

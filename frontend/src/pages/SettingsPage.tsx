@@ -7,7 +7,9 @@ import {
   removeAiProviderApiKey,
   saveAiProviderApiKey,
   setAiProviderEnabled,
+  testAiProviderConnection,
   type AiProviderConfig,
+  type AiProviderConnectionTest,
 } from "../services/ai";
 import {
   createDatabaseBackup,
@@ -36,6 +38,8 @@ export function SettingsPage() {
   const [aiProviders, setAiProviders] = useState<AiProviderConfig[]>([]);
   const [providerKeys, setProviderKeys] = useState<Record<string, string>>({});
   const [activeProvider, setActiveProvider] = useState<string | null>(null);
+  const [testingProvider, setTestingProvider] = useState<string | null>(null);
+  const [connectionTests, setConnectionTests] = useState<Record<string, AiProviderConnectionTest>>({});
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -137,6 +141,17 @@ export function SettingsPage() {
     finally { setActiveProvider(null); }
   }
 
+  async function testProviderConnection(provider: AiProviderConfig) {
+    setTestingProvider(provider.provider);
+    try {
+      const result = await testAiProviderConnection(provider.provider);
+      setConnectionTests((current) => ({ ...current, [provider.provider]: result }));
+      setMessage(`${provider.displayName}：${result.message}${result.httpStatus ? `（HTTP ${result.httpStatus}）` : ""}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : `${provider.displayName} 连接测试失败`);
+    } finally { setTestingProvider(null); }
+  }
+
   return (
     <section className="page settings-page" aria-labelledby="settings-title">
       <header className="page-header">
@@ -168,7 +183,8 @@ export function SettingsPage() {
       <section className="settings-section" aria-labelledby="ai-config-title">
         <div className="section-heading"><div><p className="section-kicker">AI provider</p><h2 id="ai-config-title">AI Provider 配置</h2></div><span>仅调用一个已启用 Provider，按优先级选择。</span></div>
         <div className="ai-provider-list">{aiProviders.map((provider) => <article className="settings-card ai-provider-card" key={provider.provider}>
-          <div className="ai-provider-header"><div><strong>{provider.displayName}</strong><p>模型：{provider.model}</p></div><div className="ai-provider-statuses"><span className={`settings-status ${provider.configured ? "is-configured" : ""}`}>{provider.configured ? "已配置" : "未配置"}</span><span className={`settings-status ${provider.enabled ? "is-enabled" : ""}`}>{provider.enabled ? "已启用" : "未启用"}</span>{provider.isCurrent ? <span className="settings-status is-current">当前使用</span> : null}<button className="secondary-button" disabled={activeProvider === provider.provider || (!provider.enabled && !provider.configured)} onClick={() => void toggleProvider(provider)} type="button">{provider.enabled ? "停用" : "启用"}</button></div></div>
+          <div className="ai-provider-header"><div><strong>{provider.displayName}</strong><p>模型：{provider.model}</p></div><div className="ai-provider-statuses"><span className={`settings-status ${provider.configured ? "is-configured" : ""}`}>{provider.configured ? "已配置" : "未配置"}</span><span className={`settings-status ${provider.enabled ? "is-enabled" : ""}`}>{provider.enabled ? "已启用" : "未启用"}</span>{provider.isCurrent ? <span className="settings-status is-current">当前使用</span> : null}<button className="secondary-button" disabled={activeProvider === provider.provider || (!provider.enabled && !provider.configured)} onClick={() => void toggleProvider(provider)} type="button">{provider.enabled ? "停用" : "启用"}</button><button className="secondary-button" disabled={testingProvider === provider.provider} onClick={() => void testProviderConnection(provider)} type="button">{testingProvider === provider.provider ? "正在测试…" : "测试连接"}</button></div></div>
+          {connectionTests[provider.provider] ? <p className={`provider-test-result ${connectionTests[provider.provider].success ? "is-success" : "is-failed"}`} role="status">连接测试：{connectionTests[provider.provider].message}{connectionTests[provider.provider].httpStatus ? `（HTTP ${connectionTests[provider.provider].httpStatus}）` : ""}</p> : null}
           <form className="tushare-token-form ai-provider-key-form" onSubmit={(event) => { event.preventDefault(); void saveProvider(provider); }}><label htmlFor={`${provider.provider}-api-key`}>{provider.displayName} API Key</label><div className="tushare-token-actions"><input autoComplete="off" disabled={activeProvider === provider.provider} id={`${provider.provider}-api-key`} onChange={(event) => setProviderKeys((current) => ({ ...current, [provider.provider]: event.target.value }))} placeholder="输入后仅保存到系统钥匙串" type="password" value={providerKeys[provider.provider] ?? ""} /><button className="primary-button" disabled={activeProvider === provider.provider} type="submit">{activeProvider === provider.provider ? "处理中…" : "保存 Key"}</button><button className="secondary-button" disabled={activeProvider === provider.provider || !provider.configured} onClick={() => void removeProvider(provider)} type="button">删除 Key</button></div></form>
         </article>)}</div>
       </section>

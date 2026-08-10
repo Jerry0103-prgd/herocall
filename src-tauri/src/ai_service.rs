@@ -28,7 +28,14 @@ use crate::{
 
 const PROMPT_VERSION: &str = "ai-research-report-v3";
 const DEEPSEEK_CHAT_COMPLETIONS_URL: &str = "https://api.deepseek.com/chat/completions";
+const DEEPSEEK_MODELS_URL: &str = "https://api.deepseek.com/models";
 const DEEPSEEK_MODEL: &str = "deepseek-chat";
+const TENCENT_TOKENHUB_CHAT_COMPLETIONS_URL: &str =
+    "https://tokenhub.tencentmaas.com/v1/chat/completions";
+const TENCENT_TOKENHUB_MODELS_URL: &str = "https://tokenhub.tencentmaas.com/v1/models";
+const DOUBAO_CHAT_COMPLETIONS_URL: &str =
+    "https://ark.cn-beijing.volces.com/api/v3/chat/completions";
+const DOUBAO_MODELS_URL: &str = "https://ark.cn-beijing.volces.com/api/v3/models";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +56,16 @@ pub struct AiProviderConfigView {
     /// `selected_runtime_provider`. At most one entry can be current.
     pub is_current: bool,
     pub priority: i64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiProviderConnectionTestView {
+    pub provider: String,
+    pub model: String,
+    pub success: bool,
+    pub http_status: Option<u16>,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -130,16 +147,19 @@ pub trait AiProviderAdapter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AiProviderError {
     message: String,
+    http_status: Option<u16>,
 }
 impl AiProviderError {
     fn unavailable() -> Self {
         Self {
             message: "AI Provider 网络请求失败".into(),
+            http_status: None,
         }
     }
     fn invalid_response(reason: impl fmt::Display) -> Self {
         Self {
             message: format!("AI Provider 返回格式错误：{reason}"),
+            http_status: None,
         }
     }
     fn http_error(status: u16, body: &str) -> Self {
@@ -151,8 +171,15 @@ impl AiProviderError {
         let detail = (!body.is_empty()).then(|| format!("：{body}"));
         Self {
             message: format!("{category}（HTTP {status}）{}", detail.unwrap_or_default()),
+            http_status: Some(status),
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct OpenAiProviderEndpoints {
+    chat_completions: &'static str,
+    models: &'static str,
 }
 impl fmt::Display for AiProviderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -210,7 +237,7 @@ fn research_report_system_prompt() -> &'static str {
 fn provider_display_name(provider: &str) -> &'static str {
     match provider {
         "DEEPSEEK" => "DeepSeek",
-        "TENCENT_HUNYUAN" => "腾讯混元",
+        "TENCENT_TOKENHUB" => "腾讯混元（TokenHub）",
         "DOUBAO" => "豆包",
         _ => "未确认 Provider",
     }
@@ -219,8 +246,26 @@ fn provider_display_name(provider: &str) -> &'static str {
 fn provider_static_name(provider: &str) -> Result<&'static str, AiServiceError> {
     match provider {
         "DEEPSEEK" => Ok("DEEPSEEK"),
-        "TENCENT_HUNYUAN" => Ok("TENCENT_HUNYUAN"),
+        "TENCENT_TOKENHUB" => Ok("TENCENT_TOKENHUB"),
         "DOUBAO" => Ok("DOUBAO"),
+        _ => Err(AiServiceError::NotConfigured),
+    }
+}
+
+fn provider_endpoints(provider: &str) -> Result<OpenAiProviderEndpoints, AiServiceError> {
+    match provider {
+        "DEEPSEEK" => Ok(OpenAiProviderEndpoints {
+            chat_completions: DEEPSEEK_CHAT_COMPLETIONS_URL,
+            models: DEEPSEEK_MODELS_URL,
+        }),
+        "TENCENT_TOKENHUB" => Ok(OpenAiProviderEndpoints {
+            chat_completions: TENCENT_TOKENHUB_CHAT_COMPLETIONS_URL,
+            models: TENCENT_TOKENHUB_MODELS_URL,
+        }),
+        "DOUBAO" => Ok(OpenAiProviderEndpoints {
+            chat_completions: DOUBAO_CHAT_COMPLETIONS_URL,
+            models: DOUBAO_MODELS_URL,
+        }),
         _ => Err(AiServiceError::NotConfigured),
     }
 }
@@ -365,20 +410,68 @@ impl AiService {
             else {
                 continue;
             };
-            let endpoint = match setting.provider.as_str() {
-                "DEEPSEEK" => DEEPSEEK_CHAT_COMPLETIONS_URL,
-                "TENCENT_HUNYUAN" => "https://api.hunyuan.cloud.tencent.com/v1/chat/completions",
-                "DOUBAO" => "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-                _ => continue,
-            };
+            let endpoints = provider_endpoints(&setting.provider)?;
             return Ok(OpenAiCompatibleProviderAdapter {
                 provider: provider_static_name(&setting.provider)?,
                 model: setting.model,
-                endpoint,
+                endpoint: endpoints.chat_completions,
                 api_key,
             });
         }
         Err(AiServiceError::NotConfigured)
+    }
+
+    /// Tests the configured Provider's OpenAI-compatible `/models` endpoint without generating
+    /// a review or sending any portfolio, market, news, or event data.
+    pub fn test_provider_connection(
+        database: &DatabaseService,
+        provider: &str,
+    ) -> Result<AiProviderConnectionTestView, AiServiceError> {
+        let setting = database
+            .list_ai_provider_settings()?
+            .into_iter()
+            .find(|setting| setting.provider == provider)
+            .ok_or(AiServiceError::NotConfigured)?;
+        let Some(api_key) = load_ai_provider_api_key_for_adapter(provider)
+            .map_err(|_| AiServiceError::KeychainUnavailable)?
+        else {
+            return Ok(AiProviderConnectionTestView {
+                provider: setting.provider,
+                model: setting.model,
+                success: false,
+                http_status: None,
+                message: "API Key 未配置".into(),
+            });
+        };
+        let endpoints = provider_endpoints(provider)?;
+        match curl_ai_get_request(endpoints.models, &api_key) {
+            Ok((response, http_status)) => {
+                if provider_model_is_listed(&response, &setting.model) {
+                    Ok(AiProviderConnectionTestView {
+                        provider: setting.provider,
+                        model: setting.model,
+                        success: true,
+                        http_status: Some(http_status),
+                        message: "连接成功，当前模型可用".into(),
+                    })
+                } else {
+                    Ok(AiProviderConnectionTestView {
+                        provider: setting.provider,
+                        model: setting.model,
+                        success: false,
+                        http_status: Some(http_status),
+                        message: "连接成功，但当前模型未在 Provider 可用模型列表中".into(),
+                    })
+                }
+            }
+            Err(error) => Ok(AiProviderConnectionTestView {
+                provider: setting.provider,
+                model: setting.model,
+                success: false,
+                http_status: error.http_status,
+                message: error.to_string(),
+            }),
+        }
     }
     pub fn generate_from_runtime(
         database: &DatabaseService,
@@ -747,6 +840,82 @@ fn contains_prohibited_language(value: &str) -> bool {
     ];
     let lower = value.to_lowercase();
     PROHIBITED.iter().any(|term| lower.contains(term))
+}
+
+fn provider_model_is_listed(response: &Value, model: &str) -> bool {
+    response
+        .get("data")
+        .and_then(Value::as_array)
+        .is_some_and(|models| {
+            models.iter().any(|entry| {
+                entry.get("id").and_then(Value::as_str) == Some(model)
+                    || entry.get("model").and_then(Value::as_str) == Some(model)
+            })
+        })
+}
+
+/// Uses OpenAI-compatible `GET /models` as a non-billable connection check. The bearer key is
+/// supplied to curl via stdin and never reaches diagnostics, a command argument, SQLite, or IPC.
+fn curl_ai_get_request(url: &str, api_key: &str) -> Result<(Value, u16), AiProviderError> {
+    let response_path = unique_response_path();
+    create_private_empty_file(&response_path)?;
+    let result = (|| {
+        let mut command = Command::new("curl");
+        command
+            .args([
+                "--config",
+                "-",
+                "--silent",
+                "--show-error",
+                "--max-time",
+                "15",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = command
+            .spawn()
+            .map_err(|_| AiProviderError::unavailable())?;
+        let config = format!(
+            "url = \"{}\"\nrequest = \"GET\"\nheader = \"Authorization: Bearer {}\"\noutput = \"{}\"\nwrite-out = \"%{{http_code}}\"\n",
+            curl_config_value(url),
+            curl_config_value(api_key),
+            curl_config_value(&response_path.to_string_lossy()),
+        );
+        child
+            .stdin
+            .as_mut()
+            .ok_or_else(AiProviderError::unavailable)?
+            .write_all(config.as_bytes())
+            .map_err(|_| AiProviderError::unavailable())?;
+        let output = child
+            .wait_with_output()
+            .map_err(|_| AiProviderError::unavailable())?;
+        if !output.status.success() {
+            ai_diagnostic("ai_provider_connection_http_status=NETWORK_FAILURE");
+            return Err(AiProviderError::unavailable());
+        }
+        let status = std::str::from_utf8(&output.stdout)
+            .ok()
+            .and_then(|value| value.trim().parse::<u16>().ok())
+            .ok_or_else(|| AiProviderError::invalid_response("连接测试缺少HTTP状态码"))?;
+        let response_body = fs::read(&response_path).map_err(|_| AiProviderError::unavailable())?;
+        if !(200..300).contains(&status) {
+            let safe_body = sanitize_api_error_body(&response_body, api_key);
+            ai_diagnostic(format!(
+                "ai_provider_connection_http_status={status} api_error_body={safe_body}"
+            ));
+            return Err(AiProviderError::http_error(status, &safe_body));
+        }
+        ai_diagnostic(format!("ai_provider_connection_http_status={status}"));
+        let response = serde_json::from_slice(&response_body).map_err(|error| {
+            ai_diagnostic(format!("connection_json_parse_failed=true reason={error}"));
+            AiProviderError::invalid_response(error)
+        })?;
+        Ok((response, status))
+    })();
+    let _ = fs::remove_file(response_path);
+    result
 }
 
 fn curl_ai_request(url: &str, api_key: &str, body: &Value) -> Result<Value, AiProviderError> {
@@ -1177,10 +1346,36 @@ mod tests {
     fn api_errors_keep_status_but_redact_the_key() {
         let error = AiProviderError::http_error(401, "invalid api key: [REDACTED]");
         assert!(error.to_string().contains("API认证失败（HTTP 401）"));
+        assert_eq!(error.http_status, Some(401));
         assert_eq!(
             sanitize_api_error_body(b"{\"error\":\"sk-test-secret\"}", "sk-test-secret"),
             "{\"error\":\"[REDACTED]\"}"
         );
+    }
+
+    #[test]
+    fn tokenhub_provider_uses_its_own_openai_compatible_endpoints_and_model_listing() {
+        let endpoints = provider_endpoints("TENCENT_TOKENHUB").expect("TokenHub endpoints");
+        assert_eq!(
+            endpoints.chat_completions,
+            "https://tokenhub.tencentmaas.com/v1/chat/completions"
+        );
+        assert_eq!(
+            endpoints.models,
+            "https://tokenhub.tencentmaas.com/v1/models"
+        );
+        assert_eq!(
+            provider_display_name("TENCENT_TOKENHUB"),
+            "腾讯混元（TokenHub）"
+        );
+        assert!(provider_model_is_listed(
+            &json!({"data": [{"id": "hunyuan-turbos-latest"}]}),
+            "hunyuan-turbos-latest"
+        ));
+        assert!(!provider_model_is_listed(
+            &json!({"data": [{"id": "other-model"}]}),
+            "hunyuan-turbos-latest"
+        ));
     }
 
     #[test]
@@ -1196,8 +1391,8 @@ mod tests {
                 priority: 1,
             },
             AiProviderConfigView {
-                provider: "TENCENT_HUNYUAN".into(),
-                display_name: "腾讯混元".into(),
+                provider: "TENCENT_TOKENHUB".into(),
+                display_name: "腾讯混元（TokenHub）".into(),
                 model: "hunyuan-turbos-latest".into(),
                 configured: true,
                 enabled: true,

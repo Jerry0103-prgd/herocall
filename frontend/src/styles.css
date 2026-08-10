@@ -160,6 +160,9 @@ tbody tr:hover { background: #142138; }
 .ai-provider-header p { margin: 6px 0 0; color: #8494aa; font-size: 12px; }
 .ai-provider-statuses { display: flex; align-items: center; gap: 9px; }
 .ai-provider-key-form { margin: 0; border-top: 1px solid #263650; border-radius: 0; box-shadow: none; }
+.provider-test-result { margin: -4px 20px 14px; font-size: 12px; }
+.provider-test-result.is-success { color: #80e0bc; }
+.provider-test-result.is-failed { color: #f0a1a1; }
 .system-sync-card strong { color: #bfcddd; font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cash-account-form { margin: 0 0 14px; padding: 24px; }
 .cash-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

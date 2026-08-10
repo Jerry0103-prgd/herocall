@@ -18,7 +18,10 @@ mod review_service;
 mod secure_storage;
 mod settings_service;
 
-use ai_service::{AiProviderConfigView, AiReviewView, AiService, AiServiceStatusView};
+use ai_service::{
+    AiProviderConfigView, AiProviderConnectionTestView, AiReviewView, AiService,
+    AiServiceStatusView,
+};
 use dashboard_service::{
     AssetSummaryView, DashboardDataStatusView, DashboardService, MarketIndexQuoteView,
 };
@@ -282,6 +285,16 @@ fn set_ai_provider_enabled(
 }
 
 #[tauri::command]
+fn test_ai_provider_connection(
+    app: tauri::AppHandle,
+    provider: String,
+) -> Result<AiProviderConnectionTestView, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    AiService::test_provider_connection(&database, &provider).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn get_latest_ai_review(
     app: tauri::AppHandle,
     review_id: i64,
@@ -386,6 +399,7 @@ pub fn run() {
             remove_ai_provider_api_key,
             get_ai_provider_key_status,
             set_ai_provider_enabled,
+            test_ai_provider_connection,
             get_latest_ai_review,
             generate_ai_review_for_snapshot,
             generate_ai_reviews_for_snapshot,

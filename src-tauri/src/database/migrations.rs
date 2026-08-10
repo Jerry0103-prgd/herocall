@@ -94,6 +94,11 @@ const MIGRATIONS: &[Migration] = &[
         checksum: "security-data-ownership-017-v1",
         sql: include_str!("../../migrations/017_security_data_ownership.sql"),
     },
+    Migration {
+        version: "018",
+        checksum: "tencent-tokenhub-provider-018-v1",
+        sql: include_str!("../../migrations/018_tencent_tokenhub_provider.sql"),
+    },
 ];
 
 pub(super) fn apply(connection: &mut Connection) -> DatabaseResult<()> {
@@ -161,4 +166,9 @@ pub(super) fn apply_011_for_upgrade_test(connection: &mut Connection) -> Databas
 #[cfg(test)]
 pub(super) fn apply_016_for_upgrade_test(connection: &mut Connection) -> DatabaseResult<()> {
     apply_migrations(connection, &MIGRATIONS[..16])
+}
+
+#[cfg(test)]
+pub(super) fn apply_017_for_upgrade_test(connection: &mut Connection) -> DatabaseResult<()> {
+    apply_migrations(connection, &MIGRATIONS[..17])
 }

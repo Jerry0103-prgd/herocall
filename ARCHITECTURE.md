@@ -42,6 +42,8 @@ Phase 6-B 的仓位复盘页面通过 `get_daily_review` 与 `generate_daily_rev
 
 Phase 7-E1 的 AI 复盘区通过 `get_ai_service_status`、`get_latest_ai_review` 和 `generate_ai_review` Command 访问 `ai_service`；设置页通过 `get_deepseek_status`、`save_deepseek_api_key`、`remove_deepseek_api_key` 管理安全配置。`DeepSeekProviderAdapter` 使用 DeepSeek 的 OpenAI Compatible Chat Completions 非流式 JSON Output 接口，密钥只保存于系统凭据库（macOS 为 Keychain），经 `curl` 标准输入传递授权头，不进入参数、日志、SQLite 或前端。每次生成必须绑定一次已保存的 `manual_refresh_runs`，冻结该次持仓 JSON 与市场快照；本阶段新闻和事件明确输入 `NO_DATA`。模型返回值必须是 JSON 的 `FACTS`、`INFERENCES`、`RISKS` 三段；保存前拒绝买卖推荐、目标价、收益预测/承诺等禁止语言，任何失败、结构异常或安全校验失败都不展示、也不落库。
 
+V1.0.7 将旧腾讯混元原生 Provider 迁移为 `Tencent TokenHub`：`TENCENT_TOKENHUB` 经 TokenHub 的 OpenAI 兼容 `/v1/chat/completions` 调用 `hunyuan-turbos-latest`，与 DeepSeek、豆包保持相同 Adapter 边界。`test_ai_provider_connection` 仅经 `/models` 验证鉴权和当前模型可用性，不会发送 AI 复盘上下文或触发模型生成。TokenHub 使用独立 Keychain 账户；历史 `TENCENT_HUNYUAN` Keychain 项不删除也不会被读取。
+
 Phase 6-D 的事件日历页面通过 `get_calendar_events` Command 访问 `event_service`。服务保存和验证事件类型、原始带时区时间、来源、可选原文地址、确认状态及证券关联；`EventDataAdapter` 是未来官方、媒体或宏观日历来源的预留接口。本阶段不接入外部事件抓取，不猜测事件日期。默认查询把当前持仓关联事件置前，再按实际事件时间升序排列；UI 可按确认状态过滤。
 
 Phase 7-A 的首次启动向导通过 `get_initialization_status` 与 `complete_initialization` Command 访问 `initialization_service`。服务只在 SQLite 的 `app_settings` 保存非敏感完成标志；向导中的现金和初始持仓分别复用既有 `settings_service`、`portfolio_ui_service` Command，数据源步骤只读取安全的“已配置/未配置”状态。所有步骤均可跳过，向导不保存 Token、不连接券商，也不请求行情或 AI 服务。

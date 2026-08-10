@@ -11,7 +11,10 @@ use keyring::Entry;
 const SERVICE_NAME: &str = "com.astockai.workbench";
 const TUSHARE_ACCOUNT_NAME: &str = "tushare-token";
 const DEEPSEEK_ACCOUNT_NAME: &str = "deepseek-api-key";
+// Retained for legacy Keychain data only. TokenHub keys deliberately use a separate account;
+// an old Hunyuan key must never be sent to Tencent TokenHub.
 const TENCENT_HUNYUAN_ACCOUNT_NAME: &str = "tencent-hunyuan-api-key";
+const TENCENT_TOKENHUB_ACCOUNT_NAME: &str = "tencent-tokenhub-api-key";
 const DOUBAO_ACCOUNT_NAME: &str = "doubao-api-key";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,6 +253,7 @@ fn ai_provider_account_name(provider: &str) -> Result<&'static str, SecureStorag
     match provider {
         "DEEPSEEK" => Ok(DEEPSEEK_ACCOUNT_NAME),
         "TENCENT_HUNYUAN" => Ok(TENCENT_HUNYUAN_ACCOUNT_NAME),
+        "TENCENT_TOKENHUB" => Ok(TENCENT_TOKENHUB_ACCOUNT_NAME),
         "DOUBAO" => Ok(DOUBAO_ACCOUNT_NAME),
         _ => Err(SecureStorageError::OperationFailed),
     }
