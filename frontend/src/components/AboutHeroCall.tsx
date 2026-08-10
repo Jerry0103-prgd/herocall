@@ -7,6 +7,17 @@ type ReleaseNote = {
 
 const releaseNotes: ReleaseNote[] = [
   {
+    version: "V1.0.11",
+    date: "2026-08-11",
+    summary: "Windows 应用图标修复",
+    groups: [
+      { title: "修复", items: [
+        "重新生成包含 16、32、48、256 像素资源的 Windows ICO 图标",
+        "Windows bundle 明确使用 icon.ico，避免桌面快捷方式使用默认白色图标",
+      ] },
+    ],
+  },
+  {
     version: "V1.0.10",
     date: "2026-08-11",
     summary: "Windows 安装包构建兼容性修复",
