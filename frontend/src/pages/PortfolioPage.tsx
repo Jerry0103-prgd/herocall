@@ -100,7 +100,7 @@ export function PortfolioPage() {
             {holdings.map((holding) => (
               <article className="watchlist-item" key={holding.holdingId}>
                 <span className="code-cell">{holding.symbol}</span>
-                <strong>{holding.name}</strong>
+                <div className="watchlist-main"><strong>{holding.name}</strong><small>当前：{holding.currentPrice ?? "暂无数据"}　<span className={Number(holding.changePercent) > 0 ? "quote-up" : Number(holding.changePercent) < 0 ? "quote-down" : "quote-flat"}>{holding.changePercent ? `${holding.changePercent}%` : "暂无数据"}</span></small></div>
                 <button className="watchlist-remove-button" disabled={removingSecurityId !== null} onClick={() => setPendingRemoval(holding)} type="button">取消关注</button>
               </article>
             ))}

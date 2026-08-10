@@ -108,6 +108,10 @@ pub struct MarketIndexQuoteRecord {
     pub symbol: String,
     pub current_price: String,
     pub change_percent: Option<String>,
+    pub open_price: Option<String>,
+    pub high_price: Option<String>,
+    pub low_price: Option<String>,
+    pub turnover_amount: Option<String>,
     pub source: String,
     pub status: String,
     pub updated_at: String,
@@ -121,6 +125,10 @@ pub struct HistoricalMarketIndexQuoteRecord {
     pub symbol: String,
     pub current_price: String,
     pub change_percent: Option<String>,
+    pub open_price: Option<String>,
+    pub high_price: Option<String>,
+    pub low_price: Option<String>,
+    pub turnover_amount: Option<String>,
     pub source: String,
     pub status: String,
     pub market_timestamp: String,
@@ -148,6 +156,9 @@ pub struct StoredMarketQuote {
     pub change_percent: String,
     pub volume: String,
     pub turnover_amount: String,
+    pub open_price: Option<String>,
+    pub high_price: Option<String>,
+    pub low_price: Option<String>,
     pub market_timestamp: String,
     pub fetched_at: String,
     pub source: String,
@@ -301,6 +312,8 @@ pub struct WatchlistItemData {
     pub market: String,
     pub security_type: String,
     pub created_at: String,
+    pub current_price: Option<String>,
+    pub change_percent: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1128,7 +1141,9 @@ impl DatabaseService {
     pub fn list_watchlist_item_data(&self) -> DatabaseResult<Vec<WatchlistItemData>> {
         let mut statement = self.connection.prepare(
             "
-            SELECT w.id, s.id, s.name, s.symbol, s.market, s.security_type, w.created_at
+            SELECT w.id, s.id, s.name, s.symbol, s.market, s.security_type, w.created_at,
+                   (SELECT mq.current_price FROM market_quotes mq WHERE mq.security_id = s.id ORDER BY mq.fetched_at DESC, mq.id DESC LIMIT 1),
+                   (SELECT mq.change_pct FROM market_quotes mq WHERE mq.security_id = s.id ORDER BY mq.fetched_at DESC, mq.id DESC LIMIT 1)
             FROM watchlist_items w
             JOIN securities s ON s.id = w.security_id
             ORDER BY w.created_at DESC, w.id DESC
@@ -1143,6 +1158,8 @@ impl DatabaseService {
                 market: row.get(4)?,
                 security_type: row.get(5)?,
                 created_at: row.get(6)?,
+                current_price: row.get(7)?,
+                change_percent: row.get(8)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -1185,6 +1202,8 @@ impl DatabaseService {
                         market: row.get(4)?,
                         security_type: row.get(5)?,
                         created_at: row.get(6)?,
+                        current_price: None,
+                        change_percent: None,
                     })
                 },
             )
@@ -1403,6 +1422,8 @@ impl DatabaseService {
                         market: row.get(4)?,
                         security_type: row.get(5)?,
                         created_at: row.get(6)?,
+                        current_price: None,
+                        change_percent: None,
                     })
                 },
             )
@@ -1537,7 +1558,8 @@ impl DatabaseService {
                 GROUP BY miq.symbol
             )
             SELECT miq.name, miq.symbol, miq.current_price, miq.change_pct,
-                   ds.name, miq.delay_status, miq.market_timestamp
+                   miq.open_price, miq.high_price, miq.low_price, miq.turnover_amount,
+                   ds.name, miq.delay_status, miq.fetched_at
             FROM market_index_quotes miq
             JOIN latest ON latest.symbol = miq.symbol
                       AND latest.market_timestamp = miq.market_timestamp
@@ -1557,9 +1579,13 @@ impl DatabaseService {
                 symbol: row.get(1)?,
                 current_price: row.get(2)?,
                 change_percent: row.get(3)?,
-                source: row.get(4)?,
-                status: row.get(5)?,
-                updated_at: row.get(6)?,
+                open_price: row.get(4)?,
+                high_price: row.get(5)?,
+                low_price: row.get(6)?,
+                turnover_amount: row.get(7)?,
+                source: row.get(8)?,
+                status: row.get(9)?,
+                updated_at: row.get(10)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -1577,6 +1603,7 @@ impl DatabaseService {
             WITH ranked AS (
                 SELECT miq.name, miq.symbol, miq.current_price,
                        COALESCE(miq.change_percent, miq.change_pct) AS change_percent,
+                       miq.open_price, miq.high_price, miq.low_price, miq.turnover_amount,
                        ds.name AS source, miq.delay_status, miq.market_timestamp, miq.fetched_at,
                        ROW_NUMBER() OVER (
                            PARTITION BY date(miq.market_timestamp, '+8 hours')
@@ -1587,7 +1614,7 @@ impl DatabaseService {
                 JOIN data_sources ds ON ds.id = ms.data_source_id
                 WHERE miq.symbol = ?1 AND trim(miq.current_price) <> ''
             )
-            SELECT name, symbol, current_price, change_percent, source, delay_status,
+            SELECT name, symbol, current_price, change_percent, open_price, high_price, low_price, turnover_amount, source, delay_status,
                    market_timestamp, fetched_at
             FROM ranked
             WHERE day_rank = 1
@@ -1601,10 +1628,14 @@ impl DatabaseService {
                 symbol: row.get(1)?,
                 current_price: row.get(2)?,
                 change_percent: row.get(3)?,
-                source: row.get(4)?,
-                status: row.get(5)?,
-                market_timestamp: row.get(6)?,
-                fetched_at: row.get(7)?,
+                open_price: row.get(4)?,
+                high_price: row.get(5)?,
+                low_price: row.get(6)?,
+                turnover_amount: row.get(7)?,
+                source: row.get(8)?,
+                status: row.get(9)?,
+                market_timestamp: row.get(10)?,
+                fetched_at: row.get(11)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -2296,13 +2327,18 @@ impl DatabaseService {
                 "
                 INSERT INTO market_index_quotes (
                     market_snapshot_id, name, symbol, current_price, change_pct, change_percent,
+                    open_price, high_price, low_price, turnover_amount,
                     market_timestamp, fetched_at, delay_status
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                 ON CONFLICT(market_snapshot_id, symbol) DO UPDATE SET
                     name = excluded.name,
                     current_price = excluded.current_price,
                     change_pct = excluded.change_pct,
                     change_percent = excluded.change_percent,
+                    open_price = excluded.open_price,
+                    high_price = excluded.high_price,
+                    low_price = excluded.low_price,
+                    turnover_amount = excluded.turnover_amount,
                     market_timestamp = excluded.market_timestamp,
                     fetched_at = excluded.fetched_at,
                     delay_status = excluded.delay_status
@@ -2314,6 +2350,10 @@ impl DatabaseService {
                     quote.current_price.to_string(),
                     quote.change_percent.to_string(),
                     quote.change_percent.to_string(),
+                    quote.open_price.map(|value| value.to_string()),
+                    quote.high_price.map(|value| value.to_string()),
+                    quote.low_price.map(|value| value.to_string()),
+                    quote.turnover_amount.to_string(),
                     quote.market_timestamp.to_rfc3339(),
                     quote.fetched_at.to_rfc3339(),
                     quote.delay_status.as_str(),
@@ -2347,6 +2387,9 @@ impl DatabaseService {
                     change_percent: row.get(6)?,
                     volume: row.get(7)?,
                     turnover_amount: row.get(8)?,
+                    open_price: None,
+                    high_price: None,
+                    low_price: None,
                     market_timestamp: row.get(9)?,
                     fetched_at: row.get(10)?,
                     source: row.get(11)?,
@@ -2369,7 +2412,8 @@ impl DatabaseService {
             "SELECT miq.symbol, miq.name,
                     CASE WHEN miq.symbol LIKE '%.SH' THEN 'SSE' ELSE 'SZSE' END,
                     miq.current_price, '0', '0',
-                    COALESCE(miq.change_percent, miq.change_pct, '0'), '0', '0',
+                    COALESCE(miq.change_percent, miq.change_pct, '0'), '0', COALESCE(miq.turnover_amount, ''),
+                    miq.open_price, miq.high_price, miq.low_price,
                     miq.market_timestamp, miq.fetched_at, ds.name, miq.delay_status
              FROM market_index_quotes miq
              JOIN market_snapshots ms ON ms.id = miq.market_snapshot_id
@@ -2389,10 +2433,13 @@ impl DatabaseService {
                     change_percent: row.get(6)?,
                     volume: row.get(7)?,
                     turnover_amount: row.get(8)?,
-                    market_timestamp: row.get(9)?,
-                    fetched_at: row.get(10)?,
-                    source: row.get(11)?,
-                    delay_status: row.get(12)?,
+                    open_price: row.get(9)?,
+                    high_price: row.get(10)?,
+                    low_price: row.get(11)?,
+                    market_timestamp: row.get(12)?,
+                    fetched_at: row.get(13)?,
+                    source: row.get(14)?,
+                    delay_status: row.get(15)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()
@@ -2464,7 +2511,7 @@ mod tests {
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 18);
+        assert_eq!(migration_count, 19);
         assert_eq!(table_count, 21);
     }
 
@@ -2983,7 +3030,7 @@ mod tests {
             })
             .expect("verify provider settings migration");
 
-        assert_eq!(migration_count, 18);
+        assert_eq!(migration_count, 19);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -3055,7 +3102,7 @@ mod tests {
             })
             .expect("read migration count");
         assert_eq!(quote, ("000001.SH".into(), "1.25".into(), "1.25".into()));
-        assert_eq!(migration_count, 18);
+        assert_eq!(migration_count, 19);
 
         let database = DatabaseService { connection };
         let records = database
@@ -3187,7 +3234,78 @@ mod tests {
                 row.get(0)
             })
             .expect("read migration count");
-        assert_eq!(migration_count, 18);
+        assert_eq!(migration_count, 19);
+    }
+
+    #[test]
+    fn migration_019_adds_nullable_intraday_fields_without_losing_index_quotes() {
+        let mut connection = Connection::open_in_memory().expect("create pre-019 database");
+        migrations::apply_018_for_upgrade_test(&mut connection)
+            .expect("apply migrations through 018");
+        connection
+            .execute(
+                "INSERT INTO data_sources (name, source_type, priority, base_url)
+                 VALUES ('旧指数来源', 'MARKET', 2, 'https://example.invalid/index')",
+                [],
+            )
+            .expect("insert source");
+        let source_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                "INSERT INTO market_snapshots (data_source_id, snapshot_kind, market_timestamp, fetched_at, delay_status)
+                 VALUES (?1, 'INDICES', '2026-08-10T08:00:00Z', '2026-08-10T08:01:00Z', 'DELAYED')",
+                [source_id],
+            )
+            .expect("insert legacy snapshot");
+        let snapshot_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                "INSERT INTO market_index_quotes (
+                    market_snapshot_id, name, symbol, current_price, change_pct, change_percent,
+                    market_timestamp, fetched_at, delay_status
+                 ) VALUES (?1, '上证指数', '000001.SH', '3500.00', '1.25', '1.25',
+                    '2026-08-10T08:00:00Z', '2026-08-10T08:01:00Z', 'DELAYED')",
+                [snapshot_id],
+            )
+            .expect("insert legacy index quote");
+
+        migrations::apply(&mut connection).expect("upgrade through 019");
+        migrations::apply(&mut connection).expect("reapply 019 idempotently");
+
+        let quote: (
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = connection
+            .query_row(
+                "SELECT symbol, current_price, change_percent, open_price, high_price, low_price
+                 FROM market_index_quotes WHERE market_snapshot_id = ?1",
+                [snapshot_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .expect("read upgraded quote");
+        assert_eq!(quote.0, "000001.SH");
+        assert_eq!(quote.1, "3500.00");
+        assert_eq!(quote.2, "1.25");
+        assert_eq!((quote.3, quote.4, quote.5), (None, None, None));
+        let migration_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .expect("read migration count");
+        assert_eq!(migration_count, 19);
     }
 
     #[test]
@@ -3222,6 +3340,9 @@ mod tests {
                 volume_unit: "LOTS".into(),
                 turnover_amount: decimal("150000"),
                 turnover_unit: "CNY".into(),
+                open_price: None,
+                high_price: None,
+                low_price: None,
                 market_timestamp,
                 fetched_at,
                 source: source.name.clone(),

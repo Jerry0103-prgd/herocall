@@ -10,7 +10,7 @@ import {
 
 const reportLabels = [
   ["当前个股情况", "stockStatus"],
-  ["当前市场环境影响", "marketAnalysis"],
+  ["市场环境分析", "marketAnalysis"],
   ["所属板块分析", "sectorAnalysis"],
   ["消息面分析", "newsAnalysis"],
   ["技术面分析", "technicalAnalysis"],

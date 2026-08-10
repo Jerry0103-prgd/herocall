@@ -7,6 +7,20 @@ type ReleaseNote = {
 
 const releaseNotes: ReleaseNote[] = [
   {
+    version: "V1.0.8",
+    date: "2026-08-10",
+    summary: "市场快照与投研信息密度优化",
+    groups: [
+      { title: "更新", items: [
+        "明确 Market Data Provider 行情服务边界",
+        "总览指数卡展示真实当日点位、涨跌幅、今开、高低点和成交额",
+        "我的关注展示已保存行情快照的当前价格与涨跌幅",
+        "AI复盘强化行情、资讯、事件和市场环境的证据要求",
+        "行情刷新失败时展示安全的具体原因",
+      ] },
+    ],
+  },
+  {
     version: "V1.0.7",
     date: "2026-08-10",
     summary: "关注标的自主录入与彻底删除",

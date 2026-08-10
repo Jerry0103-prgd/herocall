@@ -386,6 +386,9 @@ mod tests {
                     volume_unit: "LOTS".into(),
                     turnover_amount: Decimal::new(120000, 0),
                     turnover_unit: "THOUSAND_CNY".into(),
+                    open_price: None,
+                    high_price: None,
+                    low_price: None,
                     market_timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 7, 0, 0).unwrap(),
                 })
                 .collect())

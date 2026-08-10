@@ -49,6 +49,7 @@
 29. 迁移 `017` 必须从旧的单证券资讯/事件记录回填 `news_security_links`、`event_security_links`。一条资讯或事件关联证券 A/B 时删除 A 后，B 的关联及正文必须保留；市场指数快照、数据源、现金账户和全局记录不得被误删。
 30. 迁移 `018` 必须将非敏感 Provider 偏好 `TENCENT_HUNYUAN` 无损迁移为 `TENCENT_TOKENHUB`，保留启用状态和优先级，并固定模型为 `hunyuan-turbos-latest`；旧腾讯 Keychain 项不得读取、删除或写入 TokenHub。设置页对 DeepSeek、腾讯混元（TokenHub）、豆包均显示独立“已配置/已启用/当前使用”状态。
 31. Provider “测试连接”仅请求各 Provider 的 OpenAI 兼容 `/models` 端点，不发送市场快照或 AI Context。测试应安全返回成功、未配置、网络失败或带 HTTP 状态的认证/API 错误；TokenHub 成功时必须确认 `hunyuan-turbos-latest` 在模型列表中，任何 Key 均不得出现在 Tauri 返回值、前端、SQLite、日志或命令参数中。
+32. 迁移 `019` 必须为 `market_index_quotes` 安全增加可空的今开、最高、最低与成交额字段；升级前快照不得丢失，新字段保持空值而非回填假数据。东方财富 Provider 的录制响应必须规范化并持久化这些字段；Dashboard 只显示已保存的真实值，否则显示“暂无数据”。
 
 ## 4. 质量门禁
 

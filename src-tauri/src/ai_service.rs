@@ -26,7 +26,7 @@ use crate::{
     },
 };
 
-const PROMPT_VERSION: &str = "ai-research-report-v3";
+const PROMPT_VERSION: &str = "ai-research-report-v4";
 const DEEPSEEK_CHAT_COMPLETIONS_URL: &str = "https://api.deepseek.com/chat/completions";
 const DEEPSEEK_MODELS_URL: &str = "https://api.deepseek.com/models";
 const DEEPSEEK_MODEL: &str = "deepseek-chat";
@@ -231,7 +231,7 @@ impl AiProviderAdapter for OpenAiCompatibleProviderAdapter {
 }
 
 fn research_report_system_prompt() -> &'static str {
-    "你是个人A股关注标的的解释助手。仅依据输入 JSON，输出严格 JSON 对象，必须包含：facts:[string]、inferences:[string]、risks:[string]、stock_status:string、market_analysis:string、sector_analysis:string、news_analysis:string、technical_analysis:string、strategy_reference:string、conclusion:string。FACTS 只陈述有来源和时间的输入事实；INFERENCES 必须是基于这些事实的解释；RISKS 只列不确定性、数据缺失或需核验事项。七项报告依次为：当前个股情况、当前市场环境影响、所属板块分析、消息面分析、技术面分析、策略参考、综合结论。仅讨论本次输入的单只关注标的，不得提及持仓成本、盈亏、是否实际持仓或账户资产。无行业、新闻或技术指标时须明确“未确认”或“暂无数据”，不得补造内容。策略参考只能描述关注逻辑、风险关注和后续观察条件；综合结论只能总结当前判断。社区观点不能作为事实。严禁买入、卖出、加仓、减仓、建仓、清仓、推荐、目标价、收益预测、收益承诺、保证收益、必涨，且不得补造事实。"
+    "你是个人A股关注标的的解释助手。仅依据输入 JSON，输出严格 JSON 对象，必须包含：facts:[string]、inferences:[string]、risks:[string]、stock_status:string、market_analysis:string、sector_analysis:string、news_analysis:string、technical_analysis:string、strategy_reference:string、conclusion:string。FACTS 只陈述有来源和时间的输入事实；INFERENCES 必须是基于这些事实的解释；RISKS 只列不确定性、数据缺失或需核验事项。七项报告依次为：当前个股情况、市场环境分析、所属板块分析、消息面分析、技术面分析、策略参考、综合结论。当前个股情况须优先引用本次快照的当前价格、涨跌幅、成交与时间；市场环境须引用四个主要指数及其来源时间；消息面须区分公告、媒体与社区观点，并说明事件确认状态。仅讨论本次输入的单只关注标的，不得提及持仓成本、盈亏、是否实际持仓或账户资产。无行业、新闻、事件、板块或技术指标时须明确“未确认”或“暂无数据”，不得补造内容。策略参考只能描述关注逻辑、风险关注和后续观察条件；综合结论只能总结当前判断，不得给出交易动作。社区观点不能作为事实。严禁买入、卖出、加仓、减仓、建仓、清仓、推荐、目标价、收益预测、收益承诺、保证收益、必涨，且不得补造事实。"
 }
 
 fn provider_display_name(provider: &str) -> &'static str {
@@ -1076,6 +1076,9 @@ mod tests {
                 volume_unit: "UNKNOWN".into(),
                 turnover_amount: Decimal::ZERO,
                 turnover_unit: "UNKNOWN".into(),
+                open_price: None,
+                high_price: None,
+                low_price: None,
                 market_timestamp,
                 fetched_at,
                 source: source.name.clone(),

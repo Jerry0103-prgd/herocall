@@ -1,33 +1,13 @@
-import type { IndexMetric, MarketIndexQuote } from "../services/dashboard";
+import type { MarketIndexQuote } from "../services/dashboard";
 
 type MarketIndexCardProps = {
   quote: MarketIndexQuote;
 };
 
-function displayStatus(status: MarketIndexQuote["status"]) {
-  if (status === "REALTIME") return "实时";
-  if (status === "DELAYED") return "延迟";
-  if (status === "CLOSED") return "已收盘";
-  return "暂无数据";
-}
-
 function changeTone(value: string | null) {
   const numericValue = Number.parseFloat(value?.replace("%", "") ?? "");
   if (!Number.isFinite(numericValue) || numericValue === 0) return "flat";
   return numericValue > 0 ? "up" : "down";
-}
-
-function IndexMetricRow({ label, metric }: { label: string; metric: IndexMetric }) {
-  const tone = changeTone(metric.changePercent);
-  return (
-    <div className="index-metric-row">
-      <span>{label}</span>
-      <div>
-        <strong>{metric.price ?? "暂无数据"}</strong>
-        <b className={`index-change index-change--${tone}`}>{formatChangePercent(metric.changePercent)}</b>
-      </div>
-    </div>
-  );
 }
 
 function formatChangePercent(value: string | null) {
@@ -48,7 +28,13 @@ function formatBeijingTime(value: string | null) {
   return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}`;
 }
 
+function formatTurnover(value: string | null) {
+  // Adapter records the supplier-declared unit. Do not infer or relabel it in the UI.
+  return value || "暂无数据";
+}
+
 export function MarketIndexCard({ quote }: MarketIndexCardProps) {
+  const tone = changeTone(quote.changePercent);
   return (
     <article className="index-card">
       <div className="index-heading">
@@ -56,20 +42,18 @@ export function MarketIndexCard({ quote }: MarketIndexCardProps) {
           <h3>{quote.name}</h3>
           <p>{quote.symbol}</p>
         </div>
-        <span className={`status-badge status-badge--${quote.status.toLowerCase()}`}>
-          {displayStatus(quote.status)}
-        </span>
       </div>
-      <div className="index-metric-list">
-        <IndexMetricRow label="昨日收盘" metric={quote.lastClose} />
-        <IndexMetricRow label="近5日平均收盘" metric={quote.fiveDayAverage} />
-        <IndexMetricRow label="近10日平均收盘" metric={quote.tenDayAverage} />
+      <div className="index-current-value">
+        <strong>{quote.currentPrice ?? "暂无数据"}</strong>
+        <b className={`index-change index-change--${tone}`}>{formatChangePercent(quote.changePercent)}</b>
       </div>
-      <dl className="quote-meta">
-        <div><dt>来源</dt><dd>{quote.source ?? "暂无数据"}</dd></div>
-        <div><dt>更新时间</dt><dd>{formatBeijingTime(quote.updatedAt)}</dd></div>
-        <div><dt>数据状态</dt><dd>{displayStatus(quote.status)}</dd></div>
-      </dl>
+      <div className="index-intraday-grid">
+        <span>今开<b>{quote.openPrice ?? "暂无数据"}</b></span>
+        <span>最高<b>{quote.highPrice ?? "暂无数据"}</b></span>
+        <span>最低<b>{quote.lowPrice ?? "暂无数据"}</b></span>
+        <span>成交额<b>{formatTurnover(quote.turnoverAmount)}</b></span>
+      </div>
+      <p className="index-updated-at">更新时间：{formatBeijingTime(quote.updatedAt)}</p>
     </article>
   );
 }

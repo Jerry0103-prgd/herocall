@@ -57,6 +57,10 @@ export type MarketIndexQuote = {
   tenDayAverage: IndexMetric;
   currentPrice: string | null;
   changePercent: string | null;
+  openPrice: string | null;
+  highPrice: string | null;
+  lowPrice: string | null;
+  turnoverAmount: string | null;
   source: string | null;
   status: "REALTIME" | "DELAYED" | "CLOSED" | "NO_DATA";
   updatedAt: string | null;
@@ -80,6 +84,10 @@ const noDataIndices: MarketIndexQuote[] = [
   tenDayAverage: { price: null, changePercent: null },
   currentPrice: null,
   changePercent: null,
+  openPrice: null,
+  highPrice: null,
+  lowPrice: null,
+  turnoverAmount: null,
   source: null,
   status: "NO_DATA" as const,
   updatedAt: null,

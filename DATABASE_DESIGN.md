@@ -36,7 +36,7 @@
 | `event_security_links` | `event_id`, `security_id` | 事件与证券的多对多关联；删除一只关注标的时保护其他证券仍需的事件正文 |
 | `app_settings` | `setting_key`, `setting_value`, `updated_at` | 非敏感应用状态；V0.8.1 仅保存首次启动完成标志，禁止存储 API Key、Token 或券商信息 |
 
-`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）至 `018`（腾讯 TokenHub Provider 迁移）；迁移重复执行不会重新执行已应用版本，已应用迁移的校验标识不匹配会阻止继续启动。
+`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）至 `019`（指数日内字段）；迁移重复执行不会重新执行已应用版本，已应用迁移的校验标识不匹配会阻止继续启动。
 
 ## 3. 延后实现的逻辑实体
 
@@ -51,7 +51,7 @@
 - `corporate_actions.action_type` 仅允许分红、送转/拆分、除权除息三类预留值；本阶段不基于该表修改持仓、成本或交易流水。
 - `market_quotes` 必填 `data_source_id`、`market_timestamp`、`fetched_at`、`delay_status`、`source`，并以 `(security_id, data_source_id, market_timestamp)` 去重；没有任何模拟或硬编码行情写入逻辑。
 - `market_snapshots` 与 `market_quotes` 分别按来源和证券时间建立索引，支持后续可追溯查询。
-- `market_index_quotes` 按指数代码与行情时间保存源数据。Dashboard 的最近交易日收盘、近 5 日与近 10 日平均收盘只读取每个不同市场日期的一条真实已保存记录；同一日多次手动刷新不会重复计入，样本不足时返回“暂无数据”。平均收盘及其相对涨跌幅由 Rust 的精确 decimal 计算，前端不得自行计算。
+- `market_index_quotes` 按指数代码与行情时间保存源数据。迁移 `019` 增加可空的 `open_price`、`high_price`、`low_price`、`turnover_amount`，只保存 Provider 实际返回的日内字段；旧快照保持可读且显示“暂无数据”，不回填或推测。Dashboard 读取最近一次来源可追溯的指数快照。
 - `news_articles` 强制要求标题、来源、来源类型、发布时间、抓取时间、摘要和 HTTP(S) 原文地址；原文地址唯一。迁移 `017` 以 `news_security_links` 支持共享关联，资讯页只返回仍关联当前关注标的的记录。
 - `daily_reviews.review_date` 唯一；同一日期重新生成时原子更新四个摘要和关联快照，绝不生成第二条同日复盘。快照删除时复盘保留但 `snapshot_id` 设为空，以保留生成时的结构化事实和“未确认”状态。
 - `ai_reviews` 使用外键关联 `daily_reviews`，每日复盘删除时其 AI 辅助解释一并删除；`context_id` 关联冻结的 `ai_review_contexts`，后者再关联一次 `manual_refresh_runs`。迁移 `014` 新增可空 `report_json`，迁移 `016` 新增可空 `security_id`；新复盘一条记录仅对应一只关注证券。新记录必须同时保存七项报告与 `FACTS`、`INFERENCES`、`RISKS` 审计内容。运行时 API Key 不进入此表或其他 SQLite 表。

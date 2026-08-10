@@ -44,6 +44,8 @@ Phase 7-E1 的 AI 复盘区通过 `get_ai_service_status`、`get_latest_ai_revie
 
 V1.0.7 将旧腾讯混元原生 Provider 迁移为 `Tencent TokenHub`：`TENCENT_TOKENHUB` 经 TokenHub 的 OpenAI 兼容 `/v1/chat/completions` 调用 `hunyuan-turbos-latest`，与 DeepSeek、豆包保持相同 Adapter 边界。`test_ai_provider_connection` 仅经 `/models` 验证鉴权和当前模型可用性，不会发送 AI 复盘上下文或触发模型生成。TokenHub 使用独立 Keychain 账户；历史 `TENCENT_HUNYUAN` Keychain 项不删除也不会被读取。
 
+V1.0.8 将行情应用边界显式定义为 `MarketDataProvider`；东方财富公开行情、腾讯公开行情和 Tushare Adapter 均通过该 Port 被 `MarketRefreshService` 调用。界面只经 Tauri Command 读取已保存快照，绝不直接请求 Provider。公开来源保持 `DELAYED`，不因 UI 简化而被称为实时；每个快照继续记录来源、行情时间与抓取时间。
+
 Phase 6-D 的事件日历页面通过 `get_calendar_events` Command 访问 `event_service`。服务保存和验证事件类型、原始带时区时间、来源、可选原文地址、确认状态及证券关联；`EventDataAdapter` 是未来官方、媒体或宏观日历来源的预留接口。本阶段不接入外部事件抓取，不猜测事件日期。默认查询把当前持仓关联事件置前，再按实际事件时间升序排列；UI 可按确认状态过滤。
 
 Phase 7-A 的首次启动向导通过 `get_initialization_status` 与 `complete_initialization` Command 访问 `initialization_service`。服务只在 SQLite 的 `app_settings` 保存非敏感完成标志；向导中的现金和初始持仓分别复用既有 `settings_service`、`portfolio_ui_service` Command，数据源步骤只读取安全的“已配置/未配置”状态。所有步骤均可跳过，向导不保存 Token、不连接券商，也不请求行情或 AI 服务。

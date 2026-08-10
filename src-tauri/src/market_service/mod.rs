@@ -122,6 +122,9 @@ pub struct RawMarketQuote {
     pub volume_unit: String,
     pub turnover_amount: Decimal,
     pub turnover_unit: String,
+    pub open_price: Option<Decimal>,
+    pub high_price: Option<Decimal>,
+    pub low_price: Option<Decimal>,
     pub market_timestamp: DateTime<Utc>,
 }
 
@@ -139,6 +142,9 @@ pub struct MarketQuote {
     pub volume_unit: String,
     pub turnover_amount: Decimal,
     pub turnover_unit: String,
+    pub open_price: Option<Decimal>,
+    pub high_price: Option<Decimal>,
+    pub low_price: Option<Decimal>,
     pub market_timestamp: DateTime<Utc>,
     pub fetched_at: DateTime<Utc>,
     pub source: String,
@@ -204,6 +210,11 @@ pub trait MarketDataAdapter {
     ) -> Result<Vec<RawMarketQuote>, MarketAdapterError>;
 }
 
+/// Product-facing provider port. Implementations remain interchangeable Adapter instances, while
+/// application services depend on this name rather than on any vendor-specific HTTP contract.
+pub trait MarketDataProvider: MarketDataAdapter {}
+impl<T: MarketDataAdapter + ?Sized> MarketDataProvider for T {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarketStoreError {
     pub message: String,
@@ -232,7 +243,7 @@ impl MarketService {
         matches!(status, MarketStatus::Realtime | MarketStatus::Closed)
     }
 
-    pub fn fetch_snapshot<A: MarketDataAdapter + ?Sized>(
+    pub fn fetch_snapshot<A: MarketDataProvider + ?Sized>(
         adapter: &A,
         request: &MarketFetchRequest,
     ) -> MarketSnapshot {
@@ -253,7 +264,7 @@ impl MarketService {
         }
     }
 
-    pub fn fetch_and_store<A: MarketDataAdapter, S: MarketSnapshotStore>(
+    pub fn fetch_and_store<A: MarketDataProvider, S: MarketSnapshotStore>(
         adapter: &A,
         request: &MarketFetchRequest,
         store: &S,
@@ -266,7 +277,7 @@ impl MarketService {
     /// Uses providers in priority order. A provider is only bypassed after it returns `NO_DATA`;
     /// the selected snapshot always retains the actual provider name and its own delay status.
     pub fn fetch_with_fallback(
-        adapters: &[&dyn MarketDataAdapter],
+        adapters: &[&dyn MarketDataProvider],
         request: &MarketFetchRequest,
     ) -> MarketSnapshot {
         let mut last_snapshot = None;
@@ -326,6 +337,9 @@ impl MarketDataNormalizer {
                     volume_unit: raw.volume_unit,
                     turnover_amount: raw.turnover_amount,
                     turnover_unit: raw.turnover_unit,
+                    open_price: raw.open_price,
+                    high_price: raw.high_price,
+                    low_price: raw.low_price,
                     market_timestamp: raw.market_timestamp,
                     fetched_at,
                     source: source.name.clone(),
@@ -460,7 +474,7 @@ impl MarketDataAdapter for TushareAdapter {
                 "api_name": "daily",
                 "token": token,
                 "params": { "ts_code": ts_code },
-                "fields": "ts_code,trade_date,close,pre_close,change,pct_chg,vol,amount"
+                "fields": "ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount"
             });
             let payload = curl_json("POST", TUSHARE_API_URL, Some(&body))?;
             quotes.extend(parse_tushare_daily(&payload, security)?);
@@ -505,7 +519,7 @@ impl MarketDataAdapter for EastmoneyAdapter {
             .collect::<Result<Vec<_>, _>>()?
             .join(",");
         let url = format!(
-            "{EASTMONEY_QUOTE_URL}?fltt=2&invt=2&secids={secids}&fields=f2,f3,f4,f5,f6,f12,f14,f18,f124"
+            "{EASTMONEY_QUOTE_URL}?fltt=2&invt=2&secids={secids}&fields=f2,f3,f4,f5,f6,f12,f14,f15,f16,f17,f18,f124"
         );
         let payload = curl_json("GET", &url, None)?;
         parse_eastmoney_quotes(&payload, &request.securities)
@@ -732,6 +746,9 @@ fn parse_tushare_row(
         volume_unit: "LOTS".into(),
         turnover_amount: decimal("amount")?,
         turnover_unit: "THOUSAND_CNY".into(),
+        open_price: decimal("open").ok(),
+        high_price: decimal("high").ok(),
+        low_price: decimal("low").ok(),
         market_timestamp: close_timestamp_from_trade_date(&trade_date)?,
     })
 }
@@ -773,6 +790,17 @@ fn parse_eastmoney_quotes(
                 volume_unit: "SOURCE_DECLARED".into(),
                 turnover_amount: decimal_from_value(field(record, "f6")?)?,
                 turnover_unit: "SOURCE_DECLARED".into(),
+                // Intraday fields are optional: older/source-limited responses remain valid
+                // source-backed quotes, but must not be filled with invented values.
+                open_price: record
+                    .get("f17")
+                    .and_then(|value| decimal_from_value(value).ok()),
+                high_price: record
+                    .get("f15")
+                    .and_then(|value| decimal_from_value(value).ok()),
+                low_price: record
+                    .get("f16")
+                    .and_then(|value| decimal_from_value(value).ok()),
                 market_timestamp: timestamp,
             })
         })
@@ -844,6 +872,9 @@ fn parse_tencent_quotes(
                 volume_unit: "SOURCE_DECLARED".into(),
                 turnover_amount,
                 turnover_unit: "SOURCE_DECLARED".into(),
+                open_price: Decimal::from_str(fields[5]).ok(),
+                high_price: Decimal::from_str(fields[33]).ok(),
+                low_price: Decimal::from_str(fields[34]).ok(),
                 market_timestamp: timestamp,
             })
         })
@@ -978,6 +1009,9 @@ mod tests {
             volume_unit: "LOTS".into(),
             turnover_amount: decimal("150000"),
             turnover_unit: "CNY".into(),
+            open_price: None,
+            high_price: None,
+            low_price: None,
             market_timestamp,
         }
     }

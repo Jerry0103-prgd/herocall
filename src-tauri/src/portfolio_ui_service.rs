@@ -323,11 +323,11 @@ impl PortfolioUiService {
             quantity: "0".into(),
             available_quantity: None,
             average_cost: "0".into(),
-            current_price: None,
+            current_price: data.current_price,
             market_value: None,
             daily_pnl: None,
             total_pnl: None,
-            change_percent: None,
+            change_percent: data.change_percent,
             transaction_status: "关注标的".into(),
             is_watchlist: true,
         })

@@ -6,7 +6,7 @@
 
 use std::{collections::BTreeSet, error::Error, fmt, str::FromStr};
 
-use chrono::{DateTime, FixedOffset, NaiveDate, Utc};
+use chrono::{FixedOffset, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
 
@@ -40,6 +40,10 @@ pub struct MarketIndexQuoteView {
     // Retained for the non-AI daily-review schema, which reads the same latest saved close.
     pub current_price: Option<String>,
     pub change_percent: Option<String>,
+    pub open_price: Option<String>,
+    pub high_price: Option<String>,
+    pub low_price: Option<String>,
+    pub turnover_amount: Option<String>,
     pub source: Option<String>,
     pub status: String,
     pub updated_at: Option<String>,
@@ -214,8 +218,9 @@ impl DashboardService {
 
     fn load_market_snapshot_as_of(
         database: &DatabaseService,
-        today: NaiveDate,
+        _today: NaiveDate,
     ) -> Vec<MarketIndexQuoteView> {
+        let records = database.latest_market_index_quotes().unwrap_or_default();
         [
             ("上证指数", "000001.SH"),
             ("深证成指", "399001.SZ"),
@@ -224,15 +229,7 @@ impl DashboardService {
         ]
         .into_iter()
         .map(|(name, symbol)| {
-            let history = database
-                .recent_market_index_quotes_by_trading_day(symbol, 20)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|record| {
-                    market_date(&record.market_timestamp).is_some_and(|date| date < today)
-                })
-                .collect::<Vec<_>>();
-            match history.first() {
+            match records.iter().find(|record| record.symbol == symbol) {
                 Some(latest) => {
                     let last_close = IndexMetricView {
                         price: Some(latest.current_price.clone()),
@@ -241,14 +238,20 @@ impl DashboardService {
                     MarketIndexQuoteView {
                         name: latest.name.clone(),
                         symbol: latest.symbol.clone(),
-                        five_day_average: average_close_metric(&history, 5),
-                        ten_day_average: average_close_metric(&history, 10),
+                        // Kept as a backwards-compatible command field. V1.0.8 does not show
+                        // multi-day technical metrics on the overview.
+                        five_day_average: IndexMetricView::no_data(),
+                        ten_day_average: IndexMetricView::no_data(),
                         current_price: last_close.price.clone(),
                         change_percent: last_close.change_percent.clone(),
+                        open_price: latest.open_price.clone(),
+                        high_price: latest.high_price.clone(),
+                        low_price: latest.low_price.clone(),
+                        turnover_amount: latest.turnover_amount.clone(),
                         last_close,
                         source: Some(latest.source.clone()),
                         status: latest.status.clone(),
-                        updated_at: Some(latest.fetched_at.clone()),
+                        updated_at: Some(latest.updated_at.clone()),
                     }
                 }
                 None => MarketIndexQuoteView {
@@ -259,6 +262,10 @@ impl DashboardService {
                     ten_day_average: IndexMetricView::no_data(),
                     current_price: None,
                     change_percent: None,
+                    open_price: None,
+                    high_price: None,
+                    low_price: None,
+                    turnover_amount: None,
                     source: None,
                     status: "NO_DATA".into(),
                     updated_at: None,
@@ -310,48 +317,6 @@ fn shanghai_today() -> NaiveDate {
     Utc::now()
         .with_timezone(&FixedOffset::east_opt(8 * 60 * 60).expect("valid China offset"))
         .date_naive()
-}
-
-fn market_date(value: &str) -> Option<NaiveDate> {
-    DateTime::parse_from_rfc3339(value).ok().map(|timestamp| {
-        timestamp
-            .with_timezone(&FixedOffset::east_opt(8 * 60 * 60).expect("valid China offset"))
-            .date_naive()
-    })
-}
-
-/// The 5/10-day percentages express the latest verified close relative to that period's real
-/// persisted average. An incomplete, unparsable, or insufficient history remains `暂无数据`.
-fn average_close_metric(
-    history: &[crate::database::service::HistoricalMarketIndexQuoteRecord],
-    period: usize,
-) -> IndexMetricView {
-    let Some(records) = history.get(..period) else {
-        return IndexMetricView::no_data();
-    };
-    let Some(latest_close) = records
-        .first()
-        .and_then(|record| Decimal::from_str(&record.current_price).ok())
-    else {
-        return IndexMetricView::no_data();
-    };
-    let Some(total) = records
-        .iter()
-        .map(|record| Decimal::from_str(&record.current_price).ok())
-        .collect::<Option<Vec<_>>>()
-        .map(|prices| prices.into_iter().sum::<Decimal>())
-    else {
-        return IndexMetricView::no_data();
-    };
-    let average = total / Decimal::from(period as u32);
-    if average.is_zero() {
-        return IndexMetricView::no_data();
-    }
-    let change_percent = (latest_close - average) * Decimal::new(100, 0) / average;
-    IndexMetricView {
-        price: Some(decimal_to_string(average.round_dp(2))),
-        change_percent: Some(decimal_to_string(change_percent.round_dp(2))),
-    }
 }
 
 impl DataSectionStatusView {
@@ -499,6 +464,9 @@ mod tests {
                     volume_unit: "LOTS".into(),
                     turnover_amount: decimal("120"),
                     turnover_unit: "THOUSAND_CNY".into(),
+                    open_price: None,
+                    high_price: None,
+                    low_price: None,
                     market_timestamp,
                     fetched_at: market_timestamp,
                     source: "Recorded dashboard verification source".into(),
@@ -574,6 +542,9 @@ mod tests {
                     volume_unit: "SOURCE_DECLARED".into(),
                     turnover_amount: decimal("0"),
                     turnover_unit: "SOURCE_DECLARED".into(),
+                    open_price: None,
+                    high_price: None,
+                    low_price: None,
                     market_timestamp: timestamp,
                     fetched_at: timestamp,
                     source: "Recorded index source".into(),
@@ -594,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_uses_distinct_real_market_dates_for_close_averages() {
+    fn dashboard_uses_the_latest_saved_market_snapshot_without_fabricating_history() {
         let database = DatabaseService::open_in_memory().expect("initialize database");
         let source = MarketDataSource {
             name: "Recorded end-of-day index source".into(),
@@ -625,6 +596,9 @@ mod tests {
                         volume_unit: "SOURCE_DECLARED".into(),
                         turnover_amount: Decimal::ZERO,
                         turnover_unit: "SOURCE_DECLARED".into(),
+                        open_price: None,
+                        high_price: None,
+                        low_price: None,
                         market_timestamp: timestamp,
                         fetched_at: timestamp,
                         source: source.name.clone(),
@@ -654,6 +628,9 @@ mod tests {
                     volume_unit: "SOURCE_DECLARED".into(),
                     turnover_amount: Decimal::ZERO,
                     turnover_unit: "SOURCE_DECLARED".into(),
+                    open_price: None,
+                    high_price: None,
+                    low_price: None,
                     market_timestamp: refreshed_timestamp,
                     fetched_at: refreshed_timestamp,
                     source: source.name.clone(),
@@ -670,22 +647,14 @@ mod tests {
         let shanghai = &indices[0];
         assert_eq!(shanghai.last_close.price.as_deref(), Some("120"));
         assert_eq!(shanghai.last_close.change_percent.as_deref(), Some("0.84"));
-        assert_eq!(shanghai.five_day_average.price.as_deref(), Some("110"));
-        assert_eq!(
-            shanghai.five_day_average.change_percent.as_deref(),
-            Some("9.09")
-        );
-        assert_eq!(shanghai.ten_day_average.price.as_deref(), Some("106.5"));
-        assert_eq!(
-            shanghai.ten_day_average.change_percent.as_deref(),
-            Some("12.68")
-        );
+        assert_eq!(shanghai.five_day_average.price, None);
+        assert_eq!(shanghai.ten_day_average.price, None);
         assert_eq!(
             shanghai.source.as_deref(),
             Some("Recorded end-of-day index source")
         );
         assert_eq!(shanghai.status, "CLOSED");
-        assert_eq!(indices[1].five_day_average.price, None);
+        assert_eq!(indices[1].current_price, None);
     }
 
     #[test]
@@ -720,6 +689,9 @@ mod tests {
                     volume_unit: "SOURCE_DECLARED".into(),
                     turnover_amount: decimal("0"),
                     turnover_unit: "SOURCE_DECLARED".into(),
+                    open_price: None,
+                    high_price: None,
+                    low_price: None,
                     market_timestamp: timestamp,
                     fetched_at: timestamp,
                     source: "Recorded public index source".into(),

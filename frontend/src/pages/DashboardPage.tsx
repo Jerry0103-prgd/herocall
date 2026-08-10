@@ -100,8 +100,9 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
         .join(" ");
       setConnectionNotice(`${holdingsMessage}；${indicesMessage}${optionalMessage ? `。${optionalMessage}` : "。"}`);
       await loadDashboard();
-    } catch {
-      setConnectionNotice("行情刷新失败；未写入任何替代价格。");
+    } catch (error) {
+      const reason = error instanceof Error && error.message ? error.message : "本地行情服务不可用";
+      setConnectionNotice(`行情更新失败：${reason}`);
     } finally {
       setIsRefreshing(false);
     }
@@ -162,7 +163,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
       <section className="market-section" aria-label="A股主要指数">
         <div className="section-heading">
           <div><p className="section-kicker">市场</p><h2>A股主要指数</h2></div>
-          <span>仅在手动更新快照后变更；显示来源、状态与最后更新时间</span>
+          <span>仅在手动更新快照后变更</span>
         </div>
         <div className="index-grid">
           {indices.map((quote) => <MarketIndexCard key={quote.symbol} quote={quote} />)}
