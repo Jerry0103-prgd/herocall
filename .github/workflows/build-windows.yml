@@ -23,8 +23,10 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci --prefix frontend
       - name: Build unsigned Windows installers
-        working-directory: frontend
-        run: npm run tauri -- build
+        shell: pwsh
+        run: |
+          cd src-tauri
+          npm exec --prefix ../frontend tauri build
       - name: Verify Windows installer outputs
         shell: pwsh
         run: |

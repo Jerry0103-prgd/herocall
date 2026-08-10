@@ -7,6 +7,17 @@ type ReleaseNote = {
 
 const releaseNotes: ReleaseNote[] = [
   {
+    version: "V1.0.10",
+    date: "2026-08-11",
+    summary: "Windows 安装包构建兼容性修复",
+    groups: [
+      { title: "修复", items: [
+        "Windows GitHub Actions 改用 PowerShell 调用 Tauri 构建",
+        "修复 Windows CMD 无法解析前端脚本相对路径的问题",
+      ] },
+    ],
+  },
+  {
     version: "V1.0.9",
     date: "2026-08-10",
     summary: "TokenHub 模型配置与连接验证优化",
