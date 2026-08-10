@@ -89,6 +89,11 @@ const MIGRATIONS: &[Migration] = &[
         checksum: "ai-review-security-016-v1",
         sql: include_str!("../../migrations/016_ai_review_security.sql"),
     },
+    Migration {
+        version: "017",
+        checksum: "security-data-ownership-017-v1",
+        sql: include_str!("../../migrations/017_security_data_ownership.sql"),
+    },
 ];
 
 pub(super) fn apply(connection: &mut Connection) -> DatabaseResult<()> {
@@ -151,4 +156,9 @@ pub(super) fn apply_010_for_upgrade_test(connection: &mut Connection) -> Databas
 #[cfg(test)]
 pub(super) fn apply_011_for_upgrade_test(connection: &mut Connection) -> DatabaseResult<()> {
     apply_migrations(connection, &MIGRATIONS[..11])
+}
+
+#[cfg(test)]
+pub(super) fn apply_016_for_upgrade_test(connection: &mut Connection) -> DatabaseResult<()> {
+    apply_migrations(connection, &MIGRATIONS[..16])
 }

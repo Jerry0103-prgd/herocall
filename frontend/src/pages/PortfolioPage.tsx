@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { WatchlistForm } from "../components/WatchlistForm";
 import {
   createWatchlistItem,
-  deleteWatchlistItem,
+  removeFollowedSecurityCompletely,
   loadPortfolioHoldings,
   type CreateWatchlistInput,
   type PortfolioHolding,
@@ -15,6 +15,7 @@ export function PortfolioPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [removingSecurityId, setRemovingSecurityId] = useState<number | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [pendingRemoval, setPendingRemoval] = useState<PortfolioHolding | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -45,20 +46,19 @@ export function PortfolioPage() {
   }
 
   async function remove(holding: PortfolioHolding) {
-    if (!window.confirm(`确认移除“${holding.name}”吗？`)) return;
     setRemovingSecurityId(holding.securityId);
     setMessage(null);
     // Remove from the rendered list immediately. The persisted list is read back below and is
     // authoritative; an error restores it instead of silently pretending deletion succeeded.
     setHoldings((current) => current.filter((item) => item.securityId !== holding.securityId));
     try {
-      await deleteWatchlistItem(holding.holdingId, holding.securityId);
+      await removeFollowedSecurityCompletely(holding.holdingId, holding.securityId);
       const persisted = await loadPortfolioHoldings();
       if (persisted.some((item) => item.securityId === holding.securityId)) {
         throw new Error("取消关注未确认，请重新打开页面后重试");
       }
       setHoldings(persisted);
-      setMessage(`已取消关注：${holding.name}`);
+      setMessage(`已彻底删除：${holding.name}`);
     } catch (error) {
       try {
         setHoldings(await loadPortfolioHoldings());
@@ -69,6 +69,7 @@ export function PortfolioPage() {
       setMessage(error instanceof Error && error.message ? error.message : typeof error === "string" ? error : "关注标的删除失败");
     } finally {
       setRemovingSecurityId(null);
+      setPendingRemoval(null);
     }
   }
 
@@ -85,6 +86,11 @@ export function PortfolioPage() {
 
       {message ? <p className="notice" role="status">{message}</p> : null}
       {isFormOpen ? <WatchlistForm isSaving={isSaving} onCancel={() => setIsFormOpen(false)} onSubmit={save} /> : null}
+      {pendingRemoval ? <section aria-describedby="remove-follow-description" aria-labelledby="remove-follow-title" className="confirmation-dialog" role="dialog">
+        <h2 id="remove-follow-title">确认彻底删除关注标的</h2>
+        <p id="remove-follow-description">取消关注后，将同时删除该标的在 Hero Call 中保存的行情、资讯、事件及 AI 复盘数据，且无法恢复。是否继续？</p>
+        <div className="form-actions"><button className="secondary-button" disabled={removingSecurityId !== null} onClick={() => setPendingRemoval(null)} type="button">取消</button><button className="danger-button" disabled={removingSecurityId !== null} onClick={() => void remove(pendingRemoval)} type="button">{removingSecurityId !== null ? "正在删除…" : "确认删除"}</button></div>
+      </section> : null}
 
       <section className="portfolio-table-card" aria-label="关注标的列表">
         {isLoading ? <p className="table-state">正在读取本地关注标的…</p> : null}
@@ -95,7 +101,7 @@ export function PortfolioPage() {
               <article className="watchlist-item" key={holding.holdingId}>
                 <span className="code-cell">{holding.symbol}</span>
                 <strong>{holding.name}</strong>
-                <button className="watchlist-remove-button" disabled={removingSecurityId === holding.securityId} onClick={() => void remove(holding)} type="button">{removingSecurityId === holding.securityId ? "正在取消…" : "取消关注"}</button>
+                <button className="watchlist-remove-button" disabled={removingSecurityId !== null} onClick={() => setPendingRemoval(holding)} type="button">取消关注</button>
               </article>
             ))}
           </div>

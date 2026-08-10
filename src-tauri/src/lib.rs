@@ -140,14 +140,18 @@ fn delete_portfolio_holding(app: tauri::AppHandle, holding_id: i64) -> Result<()
 }
 
 #[tauri::command]
-fn delete_watchlist_item(app: tauri::AppHandle, input: DeleteWatchlistInput) -> Result<(), String> {
+fn remove_followed_security_completely(
+    app: tauri::AppHandle,
+    input: DeleteWatchlistInput,
+) -> Result<(), String> {
     eprintln!(
-        "[hero-call][watchlist-diagnostic] delete_watchlist command item_id={} security_id={}",
+        "[hero-call][watchlist-diagnostic] remove_followed_security item_id={} security_id={}",
         input.watchlist_item_id, input.security_id
     );
     let database = database::service::DatabaseService::open_app_database(&app)
         .map_err(|error| error.to_string())?;
-    PortfolioUiService::delete_watchlist(&database, input).map_err(|error| error.to_string())
+    PortfolioUiService::remove_followed_security_completely(&database, input)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -362,7 +366,7 @@ pub fn run() {
             search_watchlist_securities,
             update_portfolio_holding,
             delete_portfolio_holding,
-            delete_watchlist_item,
+            remove_followed_security_completely,
             get_settings_status,
             save_tushare_token,
             remove_tushare_token,

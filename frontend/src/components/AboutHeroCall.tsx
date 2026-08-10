@@ -7,6 +7,19 @@ type ReleaseNote = {
 
 const releaseNotes: ReleaseNote[] = [
   {
+    version: "V1.0.7",
+    date: "2026-08-10",
+    summary: "关注标的自主录入与彻底删除",
+    groups: [
+      { title: "更新", items: [
+        "新增关注不再依赖本地证券基础信息校验",
+        "取消关注新增不可恢复的二次确认",
+        "确认删除后清理该标的本地行情、资讯、事件与 AI 分析",
+        "共享资讯与事件按关联关系保护其他关注标的",
+      ] },
+    ],
+  },
+  {
     version: "V1.0.6",
     date: "2026-08-10",
     summary: "关注管理与 AI Provider 状态优化",

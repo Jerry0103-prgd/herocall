@@ -31,7 +31,8 @@ export type CreateHoldingInput = {
 };
 
 export type CreateWatchlistInput = {
-  securityId: number;
+  symbol: string;
+  name: string;
 };
 
 export type SecurityLookup = {
@@ -72,6 +73,6 @@ export function deletePortfolioHolding(holdingId: number): Promise<void> {
   return invoke<void>("delete_portfolio_holding", { holdingId });
 }
 
-export function deleteWatchlistItem(watchlistItemId: number, securityId: number): Promise<void> {
-  return invoke<void>("delete_watchlist_item", { input: { watchlistItemId, securityId } });
+export function removeFollowedSecurityCompletely(watchlistItemId: number, securityId: number): Promise<void> {
+  return invoke<void>("remove_followed_security_completely", { input: { watchlistItemId, securityId } });
 }

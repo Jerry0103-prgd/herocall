@@ -32,7 +32,8 @@ pub struct CreateHoldingInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateWatchlistInput {
-    pub security_id: i64,
+    pub symbol: String,
+    pub name: String,
 }
 
 /// Exact identity for a user-managed follow. Keeping the watchlist row id in the command
@@ -91,7 +92,6 @@ pub enum PortfolioUiError {
     Validation(&'static str),
     ExistingHolding,
     MissingHolding,
-    MissingSecurity,
 }
 
 impl fmt::Display for PortfolioUiError {
@@ -101,7 +101,6 @@ impl fmt::Display for PortfolioUiError {
             Self::Validation(message) => formatter.write_str(message),
             Self::ExistingHolding => formatter.write_str("该证券已在我的关注中"),
             Self::MissingHolding => formatter.write_str("未找到该持仓"),
-            Self::MissingSecurity => formatter.write_str("未找到可验证的证券基础信息"),
         }
     }
 }
@@ -211,20 +210,30 @@ impl PortfolioUiService {
             .ok_or(PortfolioUiError::MissingHolding)
     }
 
-    /// Creates a zero-position record that represents a followed security rather than an account
-    /// position. No price, quantity, cost, transaction, or valuation is invented here.
+    /// Creates a user-managed follow without requiring a provider-backed local security master.
+    /// When the code is not already known locally, only the user's code and name are persisted;
+    /// market, exchange and trading rule remain explicitly `UNKNOWN`.
     pub fn create_watchlist(
         database: &DatabaseService,
         input: CreateWatchlistInput,
     ) -> Result<PortfolioHoldingView, PortfolioUiError> {
-        let security = database
-            .get_security(input.security_id)
-            .map_err(|error| match error {
-                DatabaseError::Sqlite(rusqlite::Error::QueryReturnedNoRows) => {
-                    PortfolioUiError::MissingSecurity
-                }
-                other => PortfolioUiError::Database(other),
-            })?;
+        let symbol = normalized_symbol(&input.symbol)?;
+        let name = normalized_name(&input.name)?;
+        let security = match database.find_security_by_symbol(&symbol)? {
+            Some(existing) => existing,
+            None => database.create_security(NewSecurity {
+                symbol,
+                name,
+                market: "UNKNOWN".into(),
+                exchange: "UNKNOWN".into(),
+                // The user did not provide a type. This required schema default does not imply
+                // provider verification; the market and trade rule remain explicit unknowns.
+                security_type: "STOCK".into(),
+                industry: None,
+                concepts_json: "[]".into(),
+                trade_rule: "UNKNOWN".into(),
+            })?,
+        };
         if database
             .find_watchlist_item_by_security(security.id)?
             .is_some()
@@ -295,29 +304,11 @@ impl PortfolioUiService {
         Ok(())
     }
 
-    pub fn delete_watchlist(
+    pub fn remove_followed_security_completely(
         database: &DatabaseService,
         input: DeleteWatchlistInput,
     ) -> Result<(), PortfolioUiError> {
-        let deleted = database
-            .delete_watchlist_item_by_id_and_security(input.watchlist_item_id, input.security_id)?;
-        eprintln!(
-            "[hero-call][watchlist-diagnostic] delete_watchlist item_id={} security_id={} deleted_rows={}",
-            input.watchlist_item_id, input.security_id, deleted
-        );
-        if deleted == 0 {
-            return Err(PortfolioUiError::MissingHolding);
-        }
-        if database
-            .find_watchlist_item_by_security(input.security_id)?
-            .is_some()
-        {
-            return Err(PortfolioUiError::Validation("取消关注未能写入本地数据库"));
-        }
-        eprintln!(
-            "[hero-call][watchlist-diagnostic] delete_watchlist verified item_id={} security_id={}",
-            input.watchlist_item_id, input.security_id
-        );
+        database.remove_followed_security_completely(input.watchlist_item_id, input.security_id)?;
         Ok(())
     }
 
@@ -482,6 +473,13 @@ fn normalized_name(value: &str) -> Result<String, PortfolioUiError> {
         .ok_or(PortfolioUiError::Validation("证券名称不能为空"))
 }
 
+fn normalized_symbol(value: &str) -> Result<String, PortfolioUiError> {
+    let value = value.trim();
+    (value.len() == 6 && value.bytes().all(|item| item.is_ascii_digit()))
+        .then_some(value.to_owned())
+        .ok_or(PortfolioUiError::Validation("证券代码必须是 6 位数字"))
+}
+
 fn parse_positive_quantity(value: &str) -> Result<i64, PortfolioUiError> {
     value
         .trim()
@@ -597,10 +595,15 @@ mod tests {
     #[test]
     fn watchlist_uses_no_position_or_financial_data() {
         let database = DatabaseService::open_in_memory().expect("initialize database");
-        let security_id = create_security(&database, "300209", "测试关注证券");
-        let created =
-            PortfolioUiService::create_watchlist(&database, CreateWatchlistInput { security_id })
-                .expect("create watchlist item");
+        create_security(&database, "300209", "测试关注证券");
+        let created = PortfolioUiService::create_watchlist(
+            &database,
+            CreateWatchlistInput {
+                symbol: "300209".into(),
+                name: "测试关注证券".into(),
+            },
+        )
+        .expect("create watchlist item");
 
         assert!(created.is_watchlist);
         assert_eq!(created.quantity, "0");
@@ -617,7 +620,7 @@ mod tests {
             1
         );
 
-        PortfolioUiService::delete_watchlist(
+        PortfolioUiService::remove_followed_security_completely(
             &database,
             DeleteWatchlistInput {
                 watchlist_item_id: created.holding_id,
@@ -635,7 +638,31 @@ mod tests {
     }
 
     #[test]
-    fn cancelling_a_follow_preserves_an_existing_position() {
+    fn custom_code_and_name_can_be_followed_without_a_local_security_master_match() {
+        let database = DatabaseService::open_in_memory().expect("initialize database");
+        let created = PortfolioUiService::create_watchlist(
+            &database,
+            CreateWatchlistInput {
+                symbol: "123456".into(),
+                name: "用户自定义关注".into(),
+            },
+        )
+        .expect("save custom follow");
+
+        assert_eq!(created.symbol, "123456");
+        assert_eq!(created.name, "用户自定义关注");
+        let security = database
+            .find_security_by_symbol("123456")
+            .expect("find custom security")
+            .expect("custom security stored");
+        assert_eq!(security.market, "UNKNOWN");
+        assert_eq!(security.exchange, "UNKNOWN");
+        assert_eq!(security.industry, None);
+        assert_eq!(security.concepts_json, "[]");
+    }
+
+    #[test]
+    fn removing_a_follow_permanently_deletes_an_existing_position_and_history() {
         let database = DatabaseService::open_in_memory().expect("initialize database");
         let existing =
             PortfolioUiService::create(&database, create_input()).expect("create holding");
@@ -643,7 +670,8 @@ mod tests {
         let follow = PortfolioUiService::create_watchlist(
             &database,
             CreateWatchlistInput {
-                security_id: existing.security_id,
+                symbol: existing.symbol.clone(),
+                name: existing.name.clone(),
             },
         )
         .expect("explicitly create follow");
@@ -670,24 +698,21 @@ mod tests {
                 note: None,
             })
             .expect("persist historical transaction");
-        PortfolioUiService::delete_watchlist(
+        PortfolioUiService::remove_followed_security_completely(
             &database,
             DeleteWatchlistInput {
                 watchlist_item_id: follow.holding_id,
                 security_id: follow.security_id,
             },
         )
-        .expect("cancel follow without deleting position");
-        assert_eq!(
-            database
-                .list_portfolio_holding_data()
-                .expect("existing position remains")
-                .len(),
-            1
-        );
+        .expect("remove follow and all security-owned history");
         assert!(database
+            .list_portfolio_holding_data()
+            .expect("removed position is absent")
+            .is_empty());
+        assert!(!database
             .has_confirmed_transactions()
-            .expect("historical transaction remains"));
+            .expect("removed transaction is absent"));
         assert!(PortfolioUiService::list_watchlist(&database)
             .expect("follow is removed")
             .is_empty());
@@ -714,19 +739,21 @@ mod tests {
     #[test]
     fn newest_follow_is_listed_first() {
         let database = DatabaseService::open_in_memory().expect("initialize database");
-        let first_security_id = create_security(&database, "600330", "先添加");
+        create_security(&database, "600330", "先添加");
         PortfolioUiService::create_watchlist(
             &database,
             CreateWatchlistInput {
-                security_id: first_security_id,
+                symbol: "600330".into(),
+                name: "先添加".into(),
             },
         )
         .expect("first follow");
-        let second_security_id = create_security(&database, "300209", "后添加");
+        create_security(&database, "300209", "后添加");
         PortfolioUiService::create_watchlist(
             &database,
             CreateWatchlistInput {
-                security_id: second_security_id,
+                symbol: "300209".into(),
+                name: "后添加".into(),
             },
         )
         .expect("second follow");

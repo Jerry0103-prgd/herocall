@@ -1,6 +1,6 @@
 [package]
 name = "hero-call"
-version = "1.0.6"
+version = "1.0.7"
 description = "Hero Call — 个人AI投研复盘工作台"
 authors = ["Hero Call"]
 edition = "2021"

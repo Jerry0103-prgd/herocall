@@ -2,7 +2,7 @@
 
 use std::{error::Error, fmt, fs, path::Path};
 
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row, Transaction as SqliteTransaction};
 use serde::Serialize;
 use tauri::Manager;
 
@@ -565,7 +565,11 @@ impl DatabaseService {
                 input.related_security_id,
             ],
         )?;
-        self.get_news_article(self.connection.last_insert_rowid())
+        let article_id = self.connection.last_insert_rowid();
+        if let Some(security_id) = input.related_security_id {
+            self.link_news_article_to_security(article_id, security_id)?;
+        }
+        self.get_news_article(article_id)
     }
 
     pub fn upsert_news_article(&self, input: NewNewsArticle) -> DatabaseResult<NewsArticle> {
@@ -579,7 +583,11 @@ impl DatabaseService {
             params![input.title, input.source, input.source_type, input.published_at, input.fetch_time,
                 input.summary, input.url, input.related_security_id],
         )?;
-        self.connection.query_row("SELECT id, title, source, source_type, published_at, fetch_time, summary, url, related_security_id, created_at FROM news_articles WHERE url = ?1", [url], Self::map_news_article).map_err(Into::into)
+        let article = self.connection.query_row("SELECT id, title, source, source_type, published_at, fetch_time, summary, url, related_security_id, created_at FROM news_articles WHERE url = ?1", [url], Self::map_news_article).map_err(DatabaseError::from)?;
+        if let Some(security_id) = input.related_security_id {
+            self.link_news_article_to_security(article.id, security_id)?;
+        }
+        Ok(article)
     }
 
     pub fn upsert_daily_review(&self, input: NewDailyReview) -> DatabaseResult<DailyReview> {
@@ -732,7 +740,11 @@ impl DatabaseService {
                 input.status,
             ],
         )?;
-        self.get_event(self.connection.last_insert_rowid())
+        let event_id = self.connection.last_insert_rowid();
+        if let Some(security_id) = input.security_id {
+            self.link_event_to_security(event_id, security_id)?;
+        }
+        self.get_event(event_id)
     }
 
     pub fn upsert_event_by_source_url(&self, input: NewEventRecord) -> DatabaseResult<EventRecord> {
@@ -746,19 +758,14 @@ impl DatabaseService {
                 )
                 .optional()?;
             if let Some(id) = existing {
-                return self.update_event(
-                    id,
-                    EventRecordUpdate {
-                        event_type: input.event_type,
-                        title: input.title,
-                        security_id: input.security_id,
-                        event_time: input.event_time,
-                        timezone: input.timezone,
-                        source: input.source,
-                        source_url: input.source_url,
-                        status: input.status,
-                    },
-                );
+                self.connection.execute(
+                    "UPDATE events SET event_type=?1, title=?2, security_id=?3, event_time=?4, timezone=?5, source=?6, source_url=?7, status=?8 WHERE id=?9",
+                    params![input.event_type, input.title, input.security_id, input.event_time, input.timezone, input.source, input.source_url, input.status, id],
+                )?;
+                if let Some(security_id) = input.security_id {
+                    self.link_event_to_security(id, security_id)?;
+                }
+                return self.get_event(id);
             }
         }
         self.create_event(input)
@@ -798,6 +805,11 @@ impl DatabaseService {
                 id,
             ],
         )?;
+        self.connection
+            .execute("DELETE FROM event_security_links WHERE event_id = ?1", [id])?;
+        if let Some(security_id) = input.security_id {
+            self.link_event_to_security(id, security_id)?;
+        }
         self.get_event(id)
     }
 
@@ -805,6 +817,16 @@ impl DatabaseService {
         self.connection
             .execute("DELETE FROM events WHERE id = ?1", [id])
             .map_err(Into::into)
+    }
+
+    /// Adds a shareable event-to-security association. The event body remains one record even
+    /// when several followed securities point to the same disclosed source.
+    pub fn link_event_to_security(&self, event_id: i64, security_id: i64) -> DatabaseResult<()> {
+        self.connection.execute(
+            "INSERT OR IGNORE INTO event_security_links (event_id, security_id) VALUES (?1, ?2)",
+            params![event_id, security_id],
+        )?;
+        Ok(())
     }
 
     pub fn get_ai_review(&self, id: i64) -> DatabaseResult<AiReview> {
@@ -891,8 +913,10 @@ impl DatabaseService {
             "
             SELECT e.id, e.event_type, e.title, e.security_id, e.event_time, e.timezone, e.source,
                    e.source_url, e.status, e.created_at, s.name, s.symbol,
-                   CASE WHEN e.security_id IS NOT NULL AND EXISTS (
-                       SELECT 1 FROM watchlist_items w WHERE w.security_id = e.security_id
+                   CASE WHEN EXISTS (
+                       SELECT 1 FROM event_security_links l
+                       JOIN watchlist_items w ON w.security_id = l.security_id
+                       WHERE l.event_id = e.id
                    ) THEN 1 ELSE 0 END
             FROM events e
             LEFT JOIN securities s ON s.id = e.security_id
@@ -983,6 +1007,13 @@ impl DatabaseService {
                 id,
             ],
         )?;
+        self.connection.execute(
+            "DELETE FROM news_security_links WHERE news_article_id = ?1",
+            [id],
+        )?;
+        if let Some(security_id) = input.related_security_id {
+            self.link_news_article_to_security(id, security_id)?;
+        }
         self.get_news_article(id)
     }
 
@@ -990,6 +1021,20 @@ impl DatabaseService {
         self.connection
             .execute("DELETE FROM news_articles WHERE id = ?1", [id])
             .map_err(Into::into)
+    }
+
+    /// Adds a shareable news-to-security association while retaining the legacy primary
+    /// association column for existing list views and external compatibility.
+    pub fn link_news_article_to_security(
+        &self,
+        article_id: i64,
+        security_id: i64,
+    ) -> DatabaseResult<()> {
+        self.connection.execute(
+            "INSERT OR IGNORE INTO news_security_links (news_article_id, security_id) VALUES (?1, ?2)",
+            params![article_id, security_id],
+        )?;
+        Ok(())
     }
 
     pub fn list_news_articles(&self) -> DatabaseResult<Vec<NewsArticleWithSecurity>> {
@@ -1000,7 +1045,10 @@ impl DatabaseService {
         self.list_news_articles_by_scope(
             "
             WHERE EXISTS (
-                SELECT 1 FROM watchlist_items w WHERE w.security_id = n.related_security_id
+                SELECT 1
+                FROM news_security_links l
+                JOIN watchlist_items w ON w.security_id = l.security_id
+                WHERE l.news_article_id = n.id
             )
             ",
         )
@@ -1019,7 +1067,7 @@ impl DatabaseService {
     ) -> DatabaseResult<Vec<EventWithSecurity>> {
         let mut statement = self.connection.prepare(
             "SELECT e.id, e.event_type, e.title, e.security_id, e.event_time, e.timezone, e.source, e.source_url, e.status, e.created_at, s.name, s.symbol,
-                    CASE WHEN e.security_id IS NOT NULL AND EXISTS (SELECT 1 FROM watchlist_items w WHERE w.security_id=e.security_id) THEN 1 ELSE 0 END
+                    CASE WHEN EXISTS (SELECT 1 FROM event_security_links l JOIN watchlist_items w ON w.security_id=l.security_id WHERE l.event_id=e.id) THEN 1 ELSE 0 END
              FROM events e JOIN manual_refresh_events mre ON mre.event_id=e.id LEFT JOIN securities s ON s.id=e.security_id
              WHERE mre.manual_refresh_run_id=?1"
         )?;
@@ -1144,26 +1192,197 @@ impl DatabaseService {
             .map_err(Into::into)
     }
 
-    pub fn delete_watchlist_item(&self, id: i64) -> DatabaseResult<usize> {
-        self.connection
-            .execute("DELETE FROM watchlist_items WHERE id = ?1", [id])
-            .map_err(Into::into)
+    /// Permanently removes one followed security and every security-owned local record in a
+    /// single SQLite transaction. Global index snapshots, data-source configuration, cash
+    /// accounts and any news/event/AI context shared with another security are intentionally
+    /// retained. If any statement fails, the transaction is rolled back before returning.
+    pub fn remove_followed_security_completely(
+        &self,
+        watchlist_item_id: i64,
+        security_id: i64,
+    ) -> DatabaseResult<()> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let result = Self::remove_followed_security_with_transaction(
+            &transaction,
+            watchlist_item_id,
+            security_id,
+            false,
+        );
+        match result {
+            Ok(()) => transaction.commit().map_err(Into::into),
+            Err(error) => {
+                let _ = transaction.rollback();
+                Err(error)
+            }
+        }
     }
 
-    /// Cancels a follow by its stable row and security identities. A watchlist entry is intentionally
-    /// independent from holdings, transactions, quotes, news, events and AI history, so this
-    /// operation never deletes any of those records.
-    pub fn delete_watchlist_item_by_id_and_security(
+    #[cfg(test)]
+    fn remove_followed_security_with_forced_failure(
         &self,
-        id: i64,
+        watchlist_item_id: i64,
         security_id: i64,
-    ) -> DatabaseResult<usize> {
-        self.connection
-            .execute(
-                "DELETE FROM watchlist_items WHERE id = ?1 AND security_id = ?2",
-                params![id, security_id],
+    ) -> DatabaseResult<()> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let result = Self::remove_followed_security_with_transaction(
+            &transaction,
+            watchlist_item_id,
+            security_id,
+            true,
+        );
+        match result {
+            Ok(()) => transaction.commit().map_err(Into::into),
+            Err(error) => {
+                let _ = transaction.rollback();
+                Err(error)
+            }
+        }
+    }
+
+    fn remove_followed_security_with_transaction(
+        transaction: &SqliteTransaction<'_>,
+        watchlist_item_id: i64,
+        security_id: i64,
+        force_failure_after_first_delete: bool,
+    ) -> DatabaseResult<()> {
+        let watchlist_exists: Option<i64> = transaction
+            .query_row(
+                "SELECT 1 FROM watchlist_items WHERE id = ?1 AND security_id = ?2",
+                params![watchlist_item_id, security_id],
+                |row| row.get(0),
             )
-            .map_err(Into::into)
+            .optional()?;
+        if watchlist_exists.is_none() {
+            return Err(DatabaseError::AppPath("未找到当前关注关系".into()));
+        }
+
+        // Delete AI-only evidence first. Shared contexts are retained for other reports.
+        transaction.execute(
+            "DELETE FROM ai_review_contexts
+             WHERE id IN (
+                 SELECT ar.context_id FROM ai_reviews ar
+                 WHERE ar.security_id = ?1 AND ar.context_id IS NOT NULL
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM ai_reviews other
+                 WHERE other.context_id = ai_review_contexts.id
+                   AND (other.security_id IS NULL OR other.security_id <> ?1)
+             )",
+            [security_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM ai_reviews WHERE security_id = ?1",
+            [security_id],
+        )?;
+
+        // Only delete an article/event body when every one of its security associations belongs
+        // to the removed follow. Shared bodies keep their other links and refresh provenance.
+        transaction.execute(
+            "DELETE FROM manual_refresh_news_articles
+             WHERE news_article_id IN (
+                 SELECT l.news_article_id FROM news_security_links l
+                 WHERE l.security_id = ?1
+                   AND NOT EXISTS (
+                     SELECT 1 FROM news_security_links other
+                     WHERE other.news_article_id = l.news_article_id
+                       AND other.security_id <> ?1
+                   )
+             )",
+            [security_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM news_articles
+             WHERE id IN (
+                 SELECT l.news_article_id FROM news_security_links l
+                 WHERE l.security_id = ?1
+                   AND NOT EXISTS (
+                     SELECT 1 FROM news_security_links other
+                     WHERE other.news_article_id = l.news_article_id
+                       AND other.security_id <> ?1
+                   )
+             )",
+            [security_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM manual_refresh_events
+             WHERE event_id IN (
+                 SELECT l.event_id FROM event_security_links l
+                 WHERE l.security_id = ?1
+                   AND NOT EXISTS (
+                     SELECT 1 FROM event_security_links other
+                     WHERE other.event_id = l.event_id
+                       AND other.security_id <> ?1
+                   )
+             )",
+            [security_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM events
+             WHERE id IN (
+                 SELECT l.event_id FROM event_security_links l
+                 WHERE l.security_id = ?1
+                   AND NOT EXISTS (
+                     SELECT 1 FROM event_security_links other
+                     WHERE other.event_id = l.event_id
+                       AND other.security_id <> ?1
+                   )
+             )",
+            [security_id],
+        )?;
+
+        transaction.execute(
+            "DELETE FROM news_security_links WHERE security_id = ?1",
+            [security_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM event_security_links WHERE security_id = ?1",
+            [security_id],
+        )?;
+        transaction.execute(
+            "UPDATE news_articles
+             SET related_security_id = (
+                 SELECT security_id FROM news_security_links l
+                 WHERE l.news_article_id = news_articles.id
+                 ORDER BY l.security_id ASC LIMIT 1
+             )
+             WHERE related_security_id = ?1",
+            [security_id],
+        )?;
+        transaction.execute(
+            "UPDATE events
+             SET security_id = (
+                 SELECT security_id FROM event_security_links l
+                 WHERE l.event_id = events.id
+                 ORDER BY l.security_id ASC LIMIT 1
+             )
+             WHERE security_id = ?1",
+            [security_id],
+        )?;
+
+        transaction.execute(
+            "DELETE FROM market_quotes WHERE security_id = ?1",
+            [security_id],
+        )?;
+        if force_failure_after_first_delete {
+            return Err(DatabaseError::AppPath("测试注入：删除事务必须回滚".into()));
+        }
+        transaction.execute(
+            "DELETE FROM corporate_actions WHERE security_id = ?1",
+            [security_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM transactions WHERE security_id = ?1",
+            [security_id],
+        )?;
+        transaction.execute("DELETE FROM holdings WHERE security_id = ?1", [security_id])?;
+        transaction.execute(
+            "DELETE FROM watchlist_items WHERE id = ?1 AND security_id = ?2",
+            params![watchlist_item_id, security_id],
+        )?;
+        if transaction.execute("DELETE FROM securities WHERE id = ?1", [security_id])? == 0 {
+            return Err(DatabaseError::AppPath("未找到需要删除的证券".into()));
+        }
+        Ok(())
     }
 
     fn get_watchlist_item_data(&self, id: i64) -> DatabaseResult<WatchlistItemData> {
@@ -1576,8 +1795,39 @@ impl DatabaseService {
             .map_err(Into::into)
     }
 
-    /// Searches only locally persisted, source-backed security metadata. It never guesses a
-    /// symbol or manufactures a company name when the local catalogue has no match.
+    /// Finds an already persisted security by exact code without treating a missing row as an
+    /// error. A user may follow a code before any provider has populated local metadata.
+    pub fn find_security_by_symbol(&self, symbol: &str) -> DatabaseResult<Option<Security>> {
+        self.connection
+            .query_row(
+                "
+                SELECT id, symbol, name, market, exchange, security_type, industry, concepts_json, trade_rule
+                FROM securities
+                WHERE symbol = ?1
+                ORDER BY CASE WHEN market IN ('SSE', 'SZSE') THEN 0 ELSE 1 END, id DESC
+                LIMIT 1
+                ",
+                [symbol],
+                |row| {
+                    Ok(Security {
+                        id: row.get(0)?,
+                        symbol: row.get(1)?,
+                        name: row.get(2)?,
+                        market: row.get(3)?,
+                        exchange: row.get(4)?,
+                        security_type: row.get(5)?,
+                        industry: row.get(6)?,
+                        concepts_json: row.get(7)?,
+                        trade_rule: row.get(8)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// Searches only locally persisted security metadata. It never guesses a symbol or company
+    /// name when the local catalogue has no match.
     pub fn search_securities(&self, query: &str, limit: usize) -> DatabaseResult<Vec<Security>> {
         let query = query.trim();
         if query.is_empty() || limit == 0 {
@@ -2206,15 +2456,16 @@ mod tests {
                     'market_snapshots', 'market_quotes', 'data_sources', 'news_articles',
                     'daily_reviews', 'ai_reviews', 'events', 'app_settings', 'market_index_quotes',
                     'manual_refresh_runs', 'ai_review_contexts', 'manual_refresh_news_articles',
-                    'manual_refresh_events', 'watchlist_items', 'ai_provider_settings'
+                    'manual_refresh_events', 'watchlist_items', 'ai_provider_settings',
+                    'news_security_links', 'event_security_links'
                 )",
                 [],
                 |row| row.get(0),
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 16);
-        assert_eq!(table_count, 19);
+        assert_eq!(migration_count, 17);
+        assert_eq!(table_count, 21);
     }
 
     #[test]
@@ -2292,6 +2543,286 @@ mod tests {
             database.delete_holding(holding.id).expect("delete holding"),
             1
         );
+    }
+
+    #[test]
+    fn removing_followed_security_deletes_owned_records_and_preserves_shared_news() {
+        let database = DatabaseService::open_in_memory().expect("initialize database");
+        let security_a = database
+            .create_security(NewSecurity {
+                symbol: "300209".into(),
+                name: "待删除标的".into(),
+                market: "SZSE".into(),
+                exchange: "SZSE".into(),
+                security_type: "STOCK".into(),
+                industry: None,
+                concepts_json: "[]".into(),
+                trade_rule: "T_PLUS_1".into(),
+            })
+            .expect("create security a");
+        let security_b = database
+            .create_security(NewSecurity {
+                symbol: "600330".into(),
+                name: "保留标的".into(),
+                market: "SSE".into(),
+                exchange: "SSE".into(),
+                security_type: "STOCK".into(),
+                industry: None,
+                concepts_json: "[]".into(),
+                trade_rule: "T_PLUS_1".into(),
+            })
+            .expect("create security b");
+        let follow_a = database
+            .create_watchlist_item(security_a.id)
+            .expect("follow a");
+        database
+            .create_watchlist_item(security_b.id)
+            .expect("follow b");
+        let account = database
+            .create_cash_account(NewCashAccount {
+                name: "删除测试账户".into(),
+                currency: "CNY".into(),
+                available_to_buy: "0".into(),
+                withdrawable_cash: "0".into(),
+                pending_settlement: "0".into(),
+            })
+            .expect("create account");
+        database
+            .create_holding(NewHolding {
+                cash_account_id: account.id,
+                security_id: security_a.id,
+                quantity: 100,
+                available_quantity: 100,
+                average_cost: "10".into(),
+                cost_amount: "1000".into(),
+                position_source: "MANUAL".into(),
+                as_of_date: None,
+            })
+            .expect("create owned holding");
+        database
+            .connection
+            .execute(
+                "INSERT INTO data_sources (name, source_type, priority) VALUES ('删除测试行情源', 'MARKET', 2)",
+                [],
+            )
+            .expect("create market source");
+        let source_id = database.connection.last_insert_rowid();
+        database
+            .connection
+            .execute(
+                "INSERT INTO market_snapshots (data_source_id, market_timestamp, fetched_at, delay_status)
+                 VALUES (?1, '2026-08-10T08:00:00Z', '2026-08-10T08:01:00Z', 'DELAYED')",
+                [source_id],
+            )
+            .expect("create global market snapshot");
+        let snapshot_id = database.connection.last_insert_rowid();
+        database
+            .connection
+            .execute(
+                "INSERT INTO market_quotes (market_snapshot_id, security_id, data_source_id, current_price, market_timestamp, fetched_at, delay_status)
+                 VALUES (?1, ?2, ?3, '10', '2026-08-10T08:00:00Z', '2026-08-10T08:01:00Z', 'DELAYED')",
+                params![snapshot_id, security_a.id, source_id],
+            )
+            .expect("create owned quote");
+        database
+            .create_transaction(NewTransaction {
+                cash_account_id: account.id,
+                security_id: security_a.id,
+                side: "BUY".into(),
+                status: "CONFIRMED".into(),
+                record_source: "MANUAL".into(),
+                trade_date: "2026-08-10".into(),
+                quantity: 100,
+                price: "10".into(),
+                commission: "0".into(),
+                stamp_tax: "0".into(),
+                transfer_fee: "0".into(),
+                other_fee: "0".into(),
+                minimum_commission: "0".into(),
+                external_reference: None,
+                import_batch_id: None,
+                note: None,
+            })
+            .expect("create owned transaction");
+        let shared_news = database
+            .create_news_article(NewNewsArticle {
+                title: "共享公告".into(),
+                source: "测试来源".into(),
+                source_type: "OFFICIAL".into(),
+                published_at: "2026-08-10T08:00:00Z".into(),
+                fetch_time: "2026-08-10T08:01:00Z".into(),
+                summary: "共享资讯".into(),
+                url: "https://example.invalid/shared-news".into(),
+                related_security_id: Some(security_a.id),
+            })
+            .expect("create shared news");
+        database
+            .link_news_article_to_security(shared_news.id, security_b.id)
+            .expect("link shared news b");
+        let owned_news = database
+            .create_news_article(NewNewsArticle {
+                title: "独有公告".into(),
+                source: "测试来源".into(),
+                source_type: "OFFICIAL".into(),
+                published_at: "2026-08-10T08:00:00Z".into(),
+                fetch_time: "2026-08-10T08:01:00Z".into(),
+                summary: "独有资讯".into(),
+                url: "https://example.invalid/owned-news".into(),
+                related_security_id: Some(security_a.id),
+            })
+            .expect("create owned news");
+        let shared_event = database
+            .create_event(NewEventRecord {
+                event_type: "EARNINGS".into(),
+                title: "共享事件".into(),
+                security_id: Some(security_a.id),
+                event_time: "2026-08-10T09:00:00+08:00".into(),
+                timezone: "Asia/Shanghai".into(),
+                source: "测试来源".into(),
+                source_url: Some("https://example.invalid/shared-event".into()),
+                status: "CONFIRMED".into(),
+            })
+            .expect("create shared event");
+        database
+            .link_event_to_security(shared_event.id, security_b.id)
+            .expect("link shared event b");
+        let owned_event = database
+            .create_event(NewEventRecord {
+                event_type: "MAJOR_MATTER".into(),
+                title: "独有事件".into(),
+                security_id: Some(security_a.id),
+                event_time: "2026-08-10T10:00:00+08:00".into(),
+                timezone: "Asia/Shanghai".into(),
+                source: "测试来源".into(),
+                source_url: Some("https://example.invalid/owned-event".into()),
+                status: "CONFIRMED".into(),
+            })
+            .expect("create owned event");
+        let run = database
+            .create_manual_refresh_run(NewManualRefreshRun {
+                started_at: "2026-08-10T08:00:00Z".into(),
+                completed_at: "2026-08-10T08:01:00Z".into(),
+                holdings_snapshot_id: None,
+                indices_snapshot_id: None,
+                portfolio_json: "[]".into(),
+                status: "NO_DATA".into(),
+            })
+            .expect("create run");
+        database
+            .link_news_articles_to_manual_refresh_run(run.id, &[shared_news.id, owned_news.id])
+            .expect("link news refresh");
+        database
+            .link_events_to_manual_refresh_run(run.id, &[shared_event.id, owned_event.id])
+            .expect("link events refresh");
+        let review = database
+            .upsert_daily_review(NewDailyReview {
+                review_date: "2026-08-10".into(),
+                snapshot_id: None,
+                portfolio_summary: "{}".into(),
+                market_summary: "{}".into(),
+                holding_summary: "{}".into(),
+                risk_summary: "{}".into(),
+            })
+            .expect("create daily review");
+        let context_id = database
+            .create_ai_review_context(NewAiReviewContext {
+                review_id: review.id,
+                manual_refresh_run_id: run.id,
+                portfolio_json: "[]".into(),
+                market_json: "[]".into(),
+                news_json: "[]".into(),
+                events_json: "[]".into(),
+            })
+            .expect("create ai context");
+        database
+            .create_ai_review(NewAiReview {
+                review_id: review.id,
+                model: "test".into(),
+                prompt_version: "test".into(),
+                context_id,
+                provider: "TEST".into(),
+                facts: "[]".into(),
+                inferences: "[]".into(),
+                risks: "[]".into(),
+                report_json: None,
+                security_id: Some(security_a.id),
+            })
+            .expect("create owned ai review");
+
+        database
+            .remove_followed_security_completely(follow_a.watchlist_item_id, security_a.id)
+            .expect("remove followed security");
+
+        assert!(database
+            .find_security_by_symbol("300209")
+            .expect("find removed security")
+            .is_none());
+        let owned_counts: (i64, i64, i64, i64, i64, i64, i64, i64) = database
+            .connection
+            .query_row(
+                "SELECT
+                (SELECT COUNT(*) FROM holdings WHERE security_id = ?1),
+                (SELECT COUNT(*) FROM transactions WHERE security_id = ?1),
+                (SELECT COUNT(*) FROM market_quotes WHERE security_id = ?1),
+                (SELECT COUNT(*) FROM market_snapshots WHERE id = ?2),
+                (SELECT COUNT(*) FROM news_articles WHERE id = ?3),
+                (SELECT COUNT(*) FROM events WHERE id = ?4),
+                (SELECT COUNT(*) FROM ai_reviews WHERE security_id = ?1),
+                (SELECT COUNT(*) FROM ai_review_contexts WHERE id = ?5)",
+                params![
+                    security_a.id,
+                    snapshot_id,
+                    owned_news.id,
+                    owned_event.id,
+                    context_id
+                ],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
+                },
+            )
+            .expect("verify owned records removed");
+        assert_eq!(owned_counts, (0, 0, 0, 1, 0, 0, 0, 0));
+        let shared_state: (i64, i64, i64, i64) = database
+            .connection
+            .query_row(
+                "SELECT
+                (SELECT COUNT(*) FROM news_articles WHERE id = ?1),
+                (SELECT related_security_id FROM news_articles WHERE id = ?1),
+                (SELECT COUNT(*) FROM events WHERE id = ?2),
+                (SELECT security_id FROM events WHERE id = ?2)",
+                params![shared_news.id, shared_event.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("verify shared records remain");
+        assert_eq!(shared_state, (1, security_b.id, 1, security_b.id));
+    }
+
+    #[test]
+    fn failed_followed_security_removal_rolls_back_every_change() {
+        let database = DatabaseService::open_in_memory().expect("initialize database");
+        let security = database
+            .create_security(new_security())
+            .expect("create security");
+        let follow = database
+            .create_watchlist_item(security.id)
+            .expect("create follow");
+        assert!(database
+            .remove_followed_security_with_forced_failure(follow.watchlist_item_id, security.id)
+            .is_err());
+        assert!(database
+            .find_watchlist_item_by_security(security.id)
+            .expect("follow rolled back")
+            .is_some());
+        assert!(database.get_security(security.id).is_ok());
     }
 
     #[test]
@@ -2452,7 +2983,7 @@ mod tests {
             })
             .expect("verify provider settings migration");
 
-        assert_eq!(migration_count, 16);
+        assert_eq!(migration_count, 17);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -2524,7 +3055,7 @@ mod tests {
             })
             .expect("read migration count");
         assert_eq!(quote, ("000001.SH".into(), "1.25".into(), "1.25".into()));
-        assert_eq!(migration_count, 16);
+        assert_eq!(migration_count, 17);
 
         let database = DatabaseService { connection };
         let records = database
@@ -2570,6 +3101,43 @@ mod tests {
             )
         );
         assert_eq!(refresh_link_tables, 2);
+    }
+
+    #[test]
+    fn migration_017_backfills_shareable_security_links_without_losing_legacy_rows() {
+        let mut connection = Connection::open_in_memory().expect("create pre-017 database");
+        migrations::apply_016_for_upgrade_test(&mut connection)
+            .expect("apply migrations through 016");
+        connection.execute(
+            "INSERT INTO securities (symbol, name, market, instrument_type, concepts_json, trading_rule, exchange, security_type, trade_rule)
+             VALUES ('600519', '测试证券', 'SSE', 'STOCK', '[]', 'T_PLUS_1', 'SSE', 'STOCK', 'T_PLUS_1')",
+            [],
+        ).expect("insert legacy security");
+        let security_id = connection.last_insert_rowid();
+        connection.execute(
+            "INSERT INTO news_articles (title, source, source_type, published_at, fetch_time, summary, url, related_security_id)
+             VALUES ('既有资讯', '旧来源', 'OFFICIAL', '2026-08-10T08:00:00Z', '2026-08-10T08:01:00Z', '测试摘要', 'https://example.invalid/legacy-news', ?1)",
+            [security_id],
+        ).expect("insert legacy news");
+        let news_id = connection.last_insert_rowid();
+        connection.execute(
+            "INSERT INTO events (event_type, title, security_id, event_time, timezone, source, status)
+             VALUES ('EARNINGS', '既有事件', ?1, '2026-08-10T08:00:00+08:00', 'Asia/Shanghai', '旧来源', 'CONFIRMED')",
+            [security_id],
+        ).expect("insert legacy event");
+        let event_id = connection.last_insert_rowid();
+
+        migrations::apply(&mut connection).expect("upgrade through 017");
+        migrations::apply(&mut connection).expect("reapply is idempotent");
+
+        let links: (i64, i64) = connection.query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM news_security_links WHERE news_article_id = ?1 AND security_id = ?3),
+                (SELECT COUNT(*) FROM event_security_links WHERE event_id = ?2 AND security_id = ?3)",
+            params![news_id, event_id, security_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).expect("read backfilled links");
+        assert_eq!(links, (1, 1));
     }
 
     #[test]

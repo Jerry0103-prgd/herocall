@@ -36,17 +36,15 @@ export function WatchlistForm({ isSaving, onCancel, onSubmit }: WatchlistFormPro
         : undefined;
       if (exactCode) {
         setSelected(exactCode);
-        setName(exactCode.name);
+        setName((current) => current.trim() || exactCode.name);
         setLookupMessage(null);
-      } else if (normalizedSymbol.length === 6) {
-        setLookupMessage("本地暂无可验证的证券基础信息，不能保存为关注标的。");
       } else {
-        setLookupMessage(items.length === 0 ? "未找到本地已验证的匹配证券。" : "请选择一个证券以确认代码、名称和交易所。");
+        setLookupMessage(items.length === 0 ? null : "可选择本地已有证券，或继续按当前输入保存。 ");
       }
     }).catch(() => {
       if (active) {
         setCandidates([]);
-        setLookupMessage("证券基础信息暂不可用，请稍后重试。");
+        setLookupMessage("本地候选查询暂不可用，仍可按当前输入保存。");
       }
     });
     return () => { active = false; };
@@ -63,18 +61,16 @@ export function WatchlistForm({ isSaving, onCancel, onSubmit }: WatchlistFormPro
   function changeSymbol(value: string) {
     setSelected(null);
     setSymbol(value.replace(/[^0-9]/g, ""));
-    setName("");
   }
 
   function changeName(value: string) {
     setSelected(null);
     setName(value);
-    setSymbol("");
   }
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (selected) onSubmit({ securityId: selected.securityId });
+    if (symbol.trim() && name.trim()) onSubmit({ symbol: symbol.trim(), name: name.trim() });
   }
 
   return (
@@ -83,19 +79,19 @@ export function WatchlistForm({ isSaving, onCancel, onSubmit }: WatchlistFormPro
         <div><p className="section-kicker">关注标的</p><h2>加入关注列表</h2></div>
         <button className="text-button" onClick={onCancel} type="button">关闭</button>
       </div>
-      <p className="watchlist-form-intro">输入证券代码或名称，从本地已验证的证券基础信息中确认后加入关注；不记录数量、成本、价格或交易流水。</p>
+      <p className="watchlist-form-intro">填写证券代码和名称即可加入关注。本地候选仅用于辅助选择；无法识别时仍会保存为关注标的，并以“暂无数据”呈现后续未确认行情或资讯。</p>
       <div className="form-grid watchlist-form-grid">
         <label>证券代码<input inputMode="numeric" maxLength={6} onChange={(event) => changeSymbol(event.target.value)} placeholder="例如 300209" value={symbol} /></label>
         <label>证券名称<input onChange={(event) => changeName(event.target.value)} placeholder="例如 行云科技" value={name} /></label>
       </div>
-      {selected ? <p className="watchlist-selection">已确认：{selected.symbol} {selected.name} · {selected.exchange}</p> : null}
+      {selected ? <p className="watchlist-selection">本地候选：{selected.symbol} {selected.name} · {selected.exchange}</p> : null}
       {!selected && candidates.length > 0 ? <div className="watchlist-candidates" role="listbox" aria-label="证券候选">
         {candidates.map((candidate) => <button key={candidate.securityId} onClick={() => selectCandidate(candidate)} role="option" type="button"><strong>{candidate.symbol} {candidate.name}</strong><span>{candidate.exchange}</span></button>)}
       </div> : null}
       {lookupMessage ? <p className="watchlist-lookup-message" role="status">{lookupMessage}</p> : null}
       <div className="form-actions">
         <button className="secondary-button" onClick={onCancel} type="button">取消</button>
-        <button className="primary-button" disabled={isSaving || !selected} type="submit">{isSaving ? "正在加入…" : "加入关注列表"}</button>
+        <button className="primary-button" disabled={isSaving || !symbol.trim() || !name.trim()} type="submit">{isSaving ? "正在加入…" : "加入关注列表"}</button>
       </div>
     </form>
   );

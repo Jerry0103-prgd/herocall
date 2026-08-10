@@ -132,9 +132,11 @@ tbody tr:hover { background: #142138; }
 .form-grid input:disabled, .form-grid select:disabled { color: #8190a6; cursor: not-allowed; }
 .form-note { margin: 16px 0 0; color: #8192a9; font-size: 12px; line-height: 1.6; }
 .form-actions { display: flex; justify-content: end; gap: 10px; margin-top: 20px; }
-.primary-button, .secondary-button { padding: 9px 14px; border-radius: 8px; cursor: pointer; font-weight: 700; }
+.primary-button, .secondary-button, .danger-button { padding: 9px 14px; border-radius: 8px; cursor: pointer; font-weight: 700; }
 .primary-button { border: 1px solid #5de0b4; background: #5de0b4; color: #092019; }
 .primary-button:disabled { opacity: .65; cursor: wait; }
+.danger-button { border: 1px solid #d97980; background: #b9515b; color: #fff5f5; }
+.danger-button:disabled { opacity: .65; cursor: wait; }
 .secondary-button { border: 1px solid #3b4a61; background: transparent; color: #c4d0de; }
 
 .settings-page { background: radial-gradient(circle at 84% 0%, #17334b 0, transparent 34%), #0d1727; }
@@ -346,6 +348,9 @@ h3, .brand strong { color: #e7edf5; }
 .watchlist-form-intro { margin: 0 0 18px; color: #9baec2; font-size: 13px; line-height: 1.6; }
 .watchlist-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .watchlist-selection, .watchlist-lookup-message { margin: 14px 0 0; color: #92a6bd; font-size: 12px; }
+.confirmation-dialog { margin: 0 0 20px; padding: 22px 24px; border: 1px solid #79454f; border-radius: 12px; background: rgb(50 26 37 / 92%); box-shadow: 0 12px 35px rgb(0 0 0 / 18%); }
+.confirmation-dialog h2 { margin: 0; color: #f2dce0; font-size: 17px; }
+.confirmation-dialog p { margin: 10px 0 0; color: #d9bcc4; line-height: 1.65; }
 .watchlist-selection { color: #81dfbc; }
 .watchlist-candidates { display: grid; margin-top: 12px; overflow: hidden; border: 1px solid #334762; border-radius: 10px; }
 .watchlist-candidates button { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 0; border-bottom: 1px solid #293b53; background: #142238; color: #dce7f3; cursor: pointer; text-align: left; }
