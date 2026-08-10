@@ -28,7 +28,7 @@ use market_refresh_service::{ManualMarketSnapshotView, MarketRefreshService, Mar
 use news_service::{HoldingNewsView, NewsService};
 use portfolio_ui_service::{
     CreateHoldingInput, CreateWatchlistInput, PortfolioHoldingView, PortfolioUiService,
-    UpdateHoldingInput,
+    SecurityLookupView, UpdateHoldingInput,
 };
 use review_service::{DailyReviewView, ReviewService};
 use secure_storage::{
@@ -113,6 +113,16 @@ fn create_watchlist_item(
 }
 
 #[tauri::command]
+fn search_watchlist_securities(
+    app: tauri::AppHandle,
+    query: String,
+) -> Result<Vec<SecurityLookupView>, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    PortfolioUiService::search_securities(&database, &query).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn update_portfolio_holding(
     app: tauri::AppHandle,
     input: UpdateHoldingInput,
@@ -130,10 +140,10 @@ fn delete_portfolio_holding(app: tauri::AppHandle, holding_id: i64) -> Result<()
 }
 
 #[tauri::command]
-fn delete_watchlist_item(app: tauri::AppHandle, holding_id: i64) -> Result<(), String> {
+fn delete_watchlist_item(app: tauri::AppHandle, security_id: i64) -> Result<(), String> {
     let database = database::service::DatabaseService::open_app_database(&app)
         .map_err(|error| error.to_string())?;
-    PortfolioUiService::delete_watchlist(&database, holding_id).map_err(|error| error.to_string())
+    PortfolioUiService::delete_watchlist(&database, security_id).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -345,6 +355,7 @@ pub fn run() {
             get_portfolio_holdings,
             create_portfolio_holding,
             create_watchlist_item,
+            search_watchlist_securities,
             update_portfolio_holding,
             delete_portfolio_holding,
             delete_watchlist_item,

@@ -46,7 +46,7 @@ export function PortfolioPage() {
   async function remove(holding: PortfolioHolding) {
     if (!window.confirm(`确认移除“${holding.name}”吗？`)) return;
     try {
-      await deleteWatchlistItem(holding.holdingId);
+      await deleteWatchlistItem(holding.securityId);
       await refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "关注标的删除失败");

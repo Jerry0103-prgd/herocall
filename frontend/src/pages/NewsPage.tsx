@@ -53,7 +53,7 @@ export function NewsPage() {
       <header className="page-header">
         <div>
           <p className="eyebrow">Watchlist news</p>
-          <h1 id="news-title">财经资讯</h1>
+          <h1 id="news-title">个股资讯</h1>
           <p>仅展示已保存且关联当前关注标的的可追溯资讯；社区内容不作为客观事实。</p>
         </div>
       </header>

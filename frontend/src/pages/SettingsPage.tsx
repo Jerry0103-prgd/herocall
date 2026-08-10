@@ -132,7 +132,7 @@ export function SettingsPage() {
     setActiveProvider(provider.provider);
     try {
       setAiProviders(await setAiProviderEnabled(provider.provider, !provider.enabled));
-      setMessage(`${provider.displayName} 已${provider.enabled ? "关闭" : "开启"}`);
+      setMessage(`${provider.displayName} 已${provider.enabled ? "停用" : "启用"}`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "AI Provider 状态更新失败"); }
     finally { setActiveProvider(null); }
   }
@@ -166,9 +166,9 @@ export function SettingsPage() {
       </section>
 
       <section className="settings-section" aria-labelledby="ai-config-title">
-        <div className="section-heading"><div><p className="section-kicker">AI provider</p><h2 id="ai-config-title">AI Provider 配置</h2></div><span>仅调用一个已开启 Provider，按优先级选择。</span></div>
+        <div className="section-heading"><div><p className="section-kicker">AI provider</p><h2 id="ai-config-title">AI Provider 配置</h2></div><span>仅调用一个已启用 Provider，按优先级选择。</span></div>
         <div className="ai-provider-list">{aiProviders.map((provider) => <article className="settings-card ai-provider-card" key={provider.provider}>
-          <div className="ai-provider-header"><div><strong>{provider.displayName}</strong><p>模型：{provider.model}</p></div><div className="ai-provider-statuses"><span className={`settings-status ${provider.configured ? "is-configured" : ""}`}>{provider.configured ? "已配置" : "未配置"}</span><button className="secondary-button" disabled={activeProvider === provider.provider || (!provider.enabled && !provider.configured)} onClick={() => void toggleProvider(provider)} type="button">{provider.enabled ? "关闭" : "开启"}</button></div></div>
+          <div className="ai-provider-header"><div><strong>{provider.displayName}</strong><p>模型：{provider.model}</p></div><div className="ai-provider-statuses"><span className={`settings-status ${provider.configured ? "is-configured" : ""}`}>{provider.configured ? "已配置" : "未配置"}</span><span className={`settings-status ${provider.enabled ? "is-enabled" : ""}`}>{provider.enabled ? "已启用" : "未启用"}</span>{provider.isCurrent ? <span className="settings-status is-current">当前使用</span> : null}<button className="secondary-button" disabled={activeProvider === provider.provider || (!provider.enabled && !provider.configured)} onClick={() => void toggleProvider(provider)} type="button">{provider.enabled ? "停用" : "启用"}</button></div></div>
           <form className="tushare-token-form ai-provider-key-form" onSubmit={(event) => { event.preventDefault(); void saveProvider(provider); }}><label htmlFor={`${provider.provider}-api-key`}>{provider.displayName} API Key</label><div className="tushare-token-actions"><input autoComplete="off" disabled={activeProvider === provider.provider} id={`${provider.provider}-api-key`} onChange={(event) => setProviderKeys((current) => ({ ...current, [provider.provider]: event.target.value }))} placeholder="输入后仅保存到系统钥匙串" type="password" value={providerKeys[provider.provider] ?? ""} /><button className="primary-button" disabled={activeProvider === provider.provider} type="submit">{activeProvider === provider.provider ? "处理中…" : "保存 Key"}</button><button className="secondary-button" disabled={activeProvider === provider.provider || !provider.configured} onClick={() => void removeProvider(provider)} type="button">删除 Key</button></div></form>
         </article>)}</div>
       </section>

@@ -32,8 +32,18 @@ pub struct CreateHoldingInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateWatchlistInput {
+    pub security_id: i64,
+}
+
+/// A local, source-backed security candidate. This is intentionally limited to persisted
+/// securities so the UI never invents a code/name pairing.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityLookupView {
+    pub security_id: i64,
     pub symbol: String,
     pub name: String,
+    pub exchange: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,6 +59,7 @@ pub struct UpdateHoldingInput {
 #[serde(rename_all = "camelCase")]
 pub struct PortfolioHoldingView {
     pub holding_id: i64,
+    pub security_id: i64,
     pub name: String,
     pub symbol: String,
     pub market: String,
@@ -71,6 +82,7 @@ pub enum PortfolioUiError {
     Validation(&'static str),
     ExistingHolding,
     MissingHolding,
+    MissingSecurity,
 }
 
 impl fmt::Display for PortfolioUiError {
@@ -80,6 +92,7 @@ impl fmt::Display for PortfolioUiError {
             Self::Validation(message) => formatter.write_str(message),
             Self::ExistingHolding => formatter.write_str("该证券已在我的关注中"),
             Self::MissingHolding => formatter.write_str("未找到该持仓"),
+            Self::MissingSecurity => formatter.write_str("未找到可验证的证券基础信息"),
         }
     }
 }
@@ -110,6 +123,24 @@ impl PortfolioUiService {
             .list_watchlist_item_data()?
             .into_iter()
             .map(Self::watchlist_view)
+            .collect()
+    }
+
+    pub fn search_securities(
+        database: &DatabaseService,
+        query: &str,
+    ) -> Result<Vec<SecurityLookupView>, PortfolioUiError> {
+        database
+            .search_securities(query, 12)?
+            .into_iter()
+            .map(|security| {
+                Ok(SecurityLookupView {
+                    security_id: security.id,
+                    symbol: security.symbol,
+                    name: security.name,
+                    exchange: security.exchange,
+                })
+            })
             .collect()
     }
 
@@ -178,26 +209,14 @@ impl PortfolioUiService {
         database: &DatabaseService,
         input: CreateWatchlistInput,
     ) -> Result<PortfolioHoldingView, PortfolioUiError> {
-        let parsed = ParsedWatchlistInput::parse(input)?;
-        let security =
-            match database.find_security_by_symbol_and_market(&parsed.symbol, &parsed.market)? {
-                Some(security) => database.update_security_for_portfolio(
-                    security.id,
-                    &parsed.name,
-                    &parsed.security_type,
-                    &parsed.trade_rule,
-                )?,
-                None => database.create_security(NewSecurity {
-                    symbol: parsed.symbol.clone(),
-                    name: parsed.name.clone(),
-                    market: parsed.market.clone(),
-                    exchange: parsed.market.clone(),
-                    security_type: parsed.security_type.clone(),
-                    industry: None,
-                    concepts_json: "[]".into(),
-                    trade_rule: parsed.trade_rule.clone(),
-                })?,
-            };
+        let security = database
+            .get_security(input.security_id)
+            .map_err(|error| match error {
+                DatabaseError::Sqlite(rusqlite::Error::QueryReturnedNoRows) => {
+                    PortfolioUiError::MissingSecurity
+                }
+                other => PortfolioUiError::Database(other),
+            })?;
         if database
             .find_watchlist_item_by_security(security.id)?
             .is_some()
@@ -270,9 +289,9 @@ impl PortfolioUiService {
 
     pub fn delete_watchlist(
         database: &DatabaseService,
-        holding_id: i64,
+        security_id: i64,
     ) -> Result<(), PortfolioUiError> {
-        if database.delete_watchlist_item(holding_id)? == 0 {
+        if database.delete_watchlist_item_by_security(security_id)? == 0 {
             return Err(PortfolioUiError::MissingHolding);
         }
         Ok(())
@@ -281,6 +300,7 @@ impl PortfolioUiService {
     fn watchlist_view(data: WatchlistItemData) -> Result<PortfolioHoldingView, PortfolioUiError> {
         Ok(PortfolioHoldingView {
             holding_id: data.watchlist_item_id,
+            security_id: data.security_id,
             name: data.name,
             symbol: data.symbol,
             market: data.market,
@@ -302,6 +322,7 @@ impl PortfolioUiService {
         if data.quantity == 0 {
             return Ok(PortfolioHoldingView {
                 holding_id: data.holding_id,
+                security_id: data.security_id,
                 name: data.name,
                 symbol: data.symbol,
                 market: data.market,
@@ -352,6 +373,7 @@ impl PortfolioUiService {
 
         Ok(PortfolioHoldingView {
             holding_id: data.holding_id,
+            security_id: data.security_id,
             name: data.name,
             symbol: data.symbol,
             market: data.market,
@@ -388,52 +410,6 @@ struct ParsedCreateInput {
     trade_rule_value: TradeRule,
     quantity: i64,
     average_cost: Decimal,
-}
-
-struct ParsedWatchlistInput {
-    symbol: String,
-    name: String,
-    market: String,
-    security_type: String,
-    trade_rule: String,
-}
-
-impl ParsedWatchlistInput {
-    fn parse(input: CreateWatchlistInput) -> Result<Self, PortfolioUiError> {
-        let symbol = input.symbol.trim().to_owned();
-        if symbol.len() != 6 || !symbol.bytes().all(|value| value.is_ascii_digit()) {
-            return Err(PortfolioUiError::Validation("证券代码必须是 6 位数字"));
-        }
-        let (market, security_type) = infer_a_share_security(&symbol)?;
-        let trade_rule = if security_type == "ETF" {
-            "UNKNOWN"
-        } else {
-            "T_PLUS_1"
-        };
-        Ok(Self {
-            symbol,
-            name: normalized_name(&input.name)?,
-            market: market.into(),
-            security_type: security_type.into(),
-            trade_rule: trade_rule.into(),
-        })
-    }
-}
-
-fn infer_a_share_security(symbol: &str) -> Result<(&'static str, &'static str), PortfolioUiError> {
-    let market = if matches!(&symbol[..2], "60" | "68" | "51" | "52" | "56" | "58") {
-        "SSE"
-    } else if matches!(&symbol[..2], "00" | "30" | "15" | "16") {
-        "SZSE"
-    } else {
-        return Err(PortfolioUiError::Validation("暂不支持该证券代码所属市场"));
-    };
-    let security_type = if matches!(&symbol[..2], "51" | "52" | "56" | "58" | "15" | "16") {
-        "ETF"
-    } else {
-        "STOCK"
-    };
-    Ok((market, security_type))
 }
 
 impl ParsedCreateInput {
@@ -528,6 +504,28 @@ fn parse_market_status(value: &str) -> Option<MarketStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database::service::NewTransaction;
+
+    fn create_security(database: &DatabaseService, symbol: &str, name: &str) -> i64 {
+        let market = if symbol.starts_with('6') {
+            "SSE"
+        } else {
+            "SZSE"
+        };
+        database
+            .create_security(NewSecurity {
+                symbol: symbol.into(),
+                name: name.into(),
+                market: market.into(),
+                exchange: market.into(),
+                security_type: "STOCK".into(),
+                industry: None,
+                concepts_json: "[]".into(),
+                trade_rule: "T_PLUS_1".into(),
+            })
+            .expect("create source-backed security")
+            .id
+    }
 
     fn create_input() -> CreateHoldingInput {
         CreateHoldingInput {
@@ -575,14 +573,10 @@ mod tests {
     #[test]
     fn watchlist_uses_no_position_or_financial_data() {
         let database = DatabaseService::open_in_memory().expect("initialize database");
-        let created = PortfolioUiService::create_watchlist(
-            &database,
-            CreateWatchlistInput {
-                symbol: "300209".into(),
-                name: "测试关注证券".into(),
-            },
-        )
-        .expect("create watchlist item");
+        let security_id = create_security(&database, "300209", "测试关注证券");
+        let created =
+            PortfolioUiService::create_watchlist(&database, CreateWatchlistInput { security_id })
+                .expect("create watchlist item");
 
         assert!(created.is_watchlist);
         assert_eq!(created.quantity, "0");
@@ -599,7 +593,7 @@ mod tests {
             1
         );
 
-        PortfolioUiService::delete_watchlist(&database, created.holding_id)
+        PortfolioUiService::delete_watchlist(&database, created.security_id)
             .expect("delete watchlist item");
         assert!(PortfolioUiService::list(&database)
             .expect("list watchlist")
@@ -617,7 +611,30 @@ mod tests {
             .into_iter()
             .find(|item| item.symbol == existing.symbol)
             .expect("created follow");
-        PortfolioUiService::delete_watchlist(&database, follow.holding_id)
+        let persisted_holding = database
+            .get_holding(existing.holding_id)
+            .expect("existing position");
+        database
+            .create_transaction(NewTransaction {
+                cash_account_id: persisted_holding.cash_account_id,
+                security_id: persisted_holding.security_id,
+                side: "BUY".into(),
+                status: "CONFIRMED".into(),
+                record_source: "MANUAL".into(),
+                trade_date: "2026-08-10".into(),
+                quantity: 100,
+                price: "10.50".into(),
+                commission: "0".into(),
+                stamp_tax: "0".into(),
+                transfer_fee: "0".into(),
+                other_fee: "0".into(),
+                minimum_commission: "0".into(),
+                external_reference: None,
+                import_batch_id: None,
+                note: None,
+            })
+            .expect("persist historical transaction");
+        PortfolioUiService::delete_watchlist(&database, follow.security_id)
             .expect("cancel follow without deleting position");
         assert_eq!(
             database
@@ -626,6 +643,9 @@ mod tests {
                 .len(),
             1
         );
+        assert!(database
+            .has_confirmed_transactions()
+            .expect("historical transaction remains"));
         assert!(PortfolioUiService::list_watchlist(&database)
             .expect("follow is removed")
             .is_empty());
@@ -634,19 +654,19 @@ mod tests {
     #[test]
     fn newest_follow_is_listed_first() {
         let database = DatabaseService::open_in_memory().expect("initialize database");
+        let first_security_id = create_security(&database, "600330", "先添加");
         PortfolioUiService::create_watchlist(
             &database,
             CreateWatchlistInput {
-                symbol: "600330".into(),
-                name: "先添加".into(),
+                security_id: first_security_id,
             },
         )
         .expect("first follow");
+        let second_security_id = create_security(&database, "300209", "后添加");
         PortfolioUiService::create_watchlist(
             &database,
             CreateWatchlistInput {
-                symbol: "300209".into(),
-                name: "后添加".into(),
+                security_id: second_security_id,
             },
         )
         .expect("second follow");
@@ -654,5 +674,28 @@ mod tests {
         let follows = PortfolioUiService::list_watchlist(&database).expect("list follows");
         assert_eq!(follows[0].symbol, "300209");
         assert_eq!(follows[1].symbol, "600330");
+    }
+
+    #[test]
+    fn security_lookup_returns_only_persisted_exact_or_name_matches() {
+        let database = DatabaseService::open_in_memory().expect("initialize database");
+        let matching_id = create_security(&database, "300209", "行云科技");
+        create_security(&database, "600330", "天通股份");
+
+        let by_code =
+            PortfolioUiService::search_securities(&database, "300209").expect("search by code");
+        assert_eq!(by_code.len(), 1);
+        assert_eq!(by_code[0].security_id, matching_id);
+        assert_eq!(by_code[0].name, "行云科技");
+
+        let by_name =
+            PortfolioUiService::search_securities(&database, "行云").expect("search by name");
+        assert_eq!(by_name.len(), 1);
+        assert_eq!(by_name[0].symbol, "300209");
+        assert!(
+            PortfolioUiService::search_securities(&database, "不存在的证券")
+                .expect("search missing security")
+                .is_empty()
+        );
     }
 }

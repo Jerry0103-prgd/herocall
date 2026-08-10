@@ -4,6 +4,7 @@ export type SecurityType = "STOCK" | "ETF";
 
 export type PortfolioHolding = {
   holdingId: number;
+  securityId: number;
   name: string;
   symbol: string;
   market: string;
@@ -30,8 +31,14 @@ export type CreateHoldingInput = {
 };
 
 export type CreateWatchlistInput = {
+  securityId: number;
+};
+
+export type SecurityLookup = {
+  securityId: number;
   symbol: string;
   name: string;
+  exchange: string;
 };
 
 export type UpdateHoldingInput = {
@@ -53,6 +60,10 @@ export function createWatchlistItem(input: CreateWatchlistInput): Promise<Portfo
   return invoke<PortfolioHolding>("create_watchlist_item", { input });
 }
 
+export function searchWatchlistSecurities(query: string): Promise<SecurityLookup[]> {
+  return invoke<SecurityLookup[]>("search_watchlist_securities", { query });
+}
+
 export function updatePortfolioHolding(input: UpdateHoldingInput): Promise<PortfolioHolding> {
   return invoke<PortfolioHolding>("update_portfolio_holding", { input });
 }
@@ -61,6 +72,6 @@ export function deletePortfolioHolding(holdingId: number): Promise<void> {
   return invoke<void>("delete_portfolio_holding", { holdingId });
 }
 
-export function deleteWatchlistItem(watchlistItemId: number): Promise<void> {
-  return invoke<void>("delete_watchlist_item", { holdingId: watchlistItemId });
+export function deleteWatchlistItem(securityId: number): Promise<void> {
+  return invoke<void>("delete_watchlist_item", { securityId });
 }

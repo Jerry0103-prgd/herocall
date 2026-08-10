@@ -7,6 +7,20 @@ type ReleaseNote = {
 
 const releaseNotes: ReleaseNote[] = [
   {
+    version: "V1.0.6",
+    date: "2026-08-10",
+    summary: "关注管理与 AI Provider 状态优化",
+    groups: [
+      { title: "更新", items: [
+        "修复取消关注逻辑，保留全部历史研究与交易数据",
+        "支持证券代码或名称匹配本地已验证基础信息",
+        "今日总览显示实际会调用的 AI Provider",
+        "统一个股资讯页面定位与文案",
+        "明确展示 AI Provider 的配置、启用与当前使用状态",
+      ] },
+    ],
+  },
+  {
     version: "V1.0.5",
     date: "2026-08-09",
     summary: "指数收盘观察与 AI复盘信息密度优化",

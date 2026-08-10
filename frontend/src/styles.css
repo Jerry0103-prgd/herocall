@@ -150,6 +150,8 @@ tbody tr:hover { background: #142138; }
 .settings-card p { margin: 7px 0 0; color: #8494aa; font-size: 12px; line-height: 1.6; }
 .settings-status { flex: 0 0 auto; padding: 6px 10px; border: 1px solid #56647a; border-radius: 999px; color: #bac7d6; font-size: 12px; }
 .settings-status.is-configured { border-color: #4cae91; color: #80e0bc; }
+.settings-status.is-enabled { border-color: #4a7792; background: #173348; color: #90d6f1; }
+.settings-status.is-current { border-color: #4cae91; background: #15362f; color: #80e0bc; }
 .ai-provider-list { display: grid; gap: 12px; }
 .ai-provider-card { overflow: hidden; }
 .ai-provider-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 20px; }
@@ -342,6 +344,14 @@ h3, .brand strong { color: #e7edf5; }
 .watchlist-remove-button:hover { color: #f0b2b7; }
 .watchlist-form-intro { margin: 0 0 18px; color: #9baec2; font-size: 13px; line-height: 1.6; }
 .watchlist-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.watchlist-selection, .watchlist-lookup-message { margin: 14px 0 0; color: #92a6bd; font-size: 12px; }
+.watchlist-selection { color: #81dfbc; }
+.watchlist-candidates { display: grid; margin-top: 12px; overflow: hidden; border: 1px solid #334762; border-radius: 10px; }
+.watchlist-candidates button { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 0; border-bottom: 1px solid #293b53; background: #142238; color: #dce7f3; cursor: pointer; text-align: left; }
+.watchlist-candidates button:last-child { border-bottom: 0; }
+.watchlist-candidates button:hover { background: #1b3048; }
+.watchlist-candidates button strong { font-size: 13px; font-weight: 600; }
+.watchlist-candidates button span { color: #8fa1b7; font-size: 11px; }
 
 .review-contribution { grid-template-columns: minmax(180px, 1fr) minmax(150px, .55fr); }
 .review-contribution > span { color: #c5d1de; font-size: 12px; }

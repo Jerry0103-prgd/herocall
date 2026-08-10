@@ -23,7 +23,6 @@ use crate::{
     review_service::{DailyReviewView, ReviewService, ReviewServiceError},
     secure_storage::{
         get_ai_provider_key_status, get_deepseek_status, load_ai_provider_api_key_for_adapter,
-        load_deepseek_api_key_for_adapter,
     },
 };
 
@@ -46,6 +45,9 @@ pub struct AiProviderConfigView {
     pub model: String,
     pub configured: bool,
     pub enabled: bool,
+    /// The first enabled Provider with a readable Keychain key, using the same priority rule as
+    /// `selected_runtime_provider`. At most one entry can be current.
+    pub is_current: bool,
     pub priority: i64,
 }
 
@@ -158,60 +160,6 @@ impl fmt::Display for AiProviderError {
     }
 }
 impl Error for AiProviderError {}
-
-/// DeepSeek's OpenAI-compatible non-streaming Chat Completions endpoint. The Keychain value is
-/// only held in this Rust adapter and is passed to curl via stdin, never as an argument or log.
-pub struct DeepSeekProviderAdapter {
-    api_key: String,
-}
-impl DeepSeekProviderAdapter {
-    fn from_keychain() -> Result<Self, AiServiceError> {
-        let key = load_deepseek_api_key_for_adapter().map_err(|_| {
-            ai_diagnostic("keychain_read=false");
-            AiServiceError::KeychainUnavailable
-        })?;
-        ai_diagnostic(format!("keychain_read={}", key.is_some()));
-        Self::from_key(key)
-    }
-    fn from_key(key: Option<String>) -> Result<Self, AiServiceError> {
-        key.filter(|value| !value.trim().is_empty())
-            .map(|api_key| Self { api_key })
-            .ok_or(AiServiceError::NotConfigured)
-    }
-}
-impl AiProviderAdapter for DeepSeekProviderAdapter {
-    fn model(&self) -> &str {
-        DEEPSEEK_MODEL
-    }
-    fn provider(&self) -> &str {
-        "DEEPSEEK"
-    }
-    fn generate(&self, input: &AiReviewInput) -> Result<AiReviewSections, AiProviderError> {
-        let prompt = serde_json::to_string(input).map_err(|_| AiProviderError::unavailable())?;
-        let response = curl_ai_request(
-            DEEPSEEK_CHAT_COMPLETIONS_URL,
-            &self.api_key,
-            &json!({
-                "model": DEEPSEEK_MODEL,
-                "stream": false,
-                "temperature": 0,
-                "response_format": { "type": "json_object" },
-                "messages": [
-                  { "role": "system", "content": "你是个人A股投研复盘的解释助手。仅依据输入 JSON，输出严格 JSON 对象，必须包含：facts:[string]、inferences:[string]、risks:[string]、stock_status:string、market_analysis:string、sector_analysis:string、news_analysis:string、technical_analysis:string、strategy_reference:string、conclusion:string。FACTS 只陈述有来源和时间的输入事实；INFERENCES 必须是基于这些事实的解释；RISKS 只列不确定性、数据缺失或需核验事项。七项报告依次为：当前个股情况、当日市场整体情绪和板块情况、个股所属板块分析、个股消息面分析、个股技术面分析、策略参考、综合结论。无行业、新闻或技术指标时必须明确“暂无数据/未确认”，不得补造内容。策略参考只能描述持有逻辑、风险关注和后续观察条件；综合结论只能总结当前判断。社区观点不能作为事实。严禁买入、卖出、加仓、减仓、建仓、清仓、推荐、目标价、收益预测、收益承诺、保证收益、必涨，且不得补造事实。" },
-                  { "role": "user", "content": prompt }
-                ]
-            }),
-        )?;
-        let content = response
-            .pointer("/choices/0/message/content")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AiProviderError::invalid_response("缺少 choices[0].message.content"))?;
-        parse_and_validate_provider_sections(content).map_err(|error| {
-            ai_diagnostic(format!("json_parse_failed=true reason={error}"));
-            AiProviderError::invalid_response(error)
-        })
-    }
-}
 
 /// OpenAI-compatible provider boundary shared by the selectable providers. Only the selected
 /// provider receives a request; its Keychain key remains in this adapter and never crosses IPC.
@@ -351,7 +299,7 @@ impl AiService {
     pub fn provider_configs(
         database: &DatabaseService,
     ) -> Result<Vec<AiProviderConfigView>, AiServiceError> {
-        database
+        let mut configs = database
             .list_ai_provider_settings()?
             .into_iter()
             .map(|setting| {
@@ -364,10 +312,13 @@ impl AiService {
                     model: setting.model,
                     configured,
                     enabled: setting.enabled,
+                    is_current: false,
                     priority: setting.priority,
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>, AiServiceError>>()?;
+        mark_current_provider(&mut configs);
+        Ok(configs)
     }
 
     pub fn set_provider_enabled(
@@ -434,7 +385,10 @@ impl AiService {
         review_date: &str,
     ) -> Result<AiReviewView, AiServiceError> {
         let result = (|| {
-            let provider = DeepSeekProviderAdapter::from_keychain()?;
+            // Keep the legacy single-review command on the exact same Provider-selection path
+            // as the per-security UI flow. This prevents a configured-but-not-current DeepSeek
+            // key from being called when Settings and Dashboard show another Provider.
+            let provider = Self::selected_runtime_provider(database)?;
             Self::generate_with_provider(database, review_date, &provider)
         })();
         if let Err(error) = &result {
@@ -689,6 +643,17 @@ impl AiService {
             security_symbol: record.security_symbol,
             created_at: record.created_at,
         })
+    }
+}
+
+fn mark_current_provider(configs: &mut [AiProviderConfigView]) {
+    let current = configs
+        .iter()
+        .filter(|provider| provider.enabled && provider.configured)
+        .min_by_key(|provider| provider.priority)
+        .map(|provider| provider.provider.clone());
+    for provider in configs {
+        provider.is_current = current.as_deref() == Some(provider.provider.as_str());
     }
 }
 
@@ -1090,13 +1055,6 @@ mod tests {
         }
     }
     #[test]
-    fn no_key_is_unconfigured() {
-        assert!(matches!(
-            DeepSeekProviderAdapter::from_key(None),
-            Err(AiServiceError::NotConfigured)
-        ));
-    }
-    #[test]
     fn provider_success_persists_only_valid_context_bound_sections() {
         let database = DatabaseService::open_in_memory().unwrap();
         let review = stored_review_and_snapshot(&database);
@@ -1223,5 +1181,44 @@ mod tests {
             sanitize_api_error_body(b"{\"error\":\"sk-test-secret\"}", "sk-test-secret"),
             "{\"error\":\"[REDACTED]\"}"
         );
+    }
+
+    #[test]
+    fn provider_status_marks_only_the_runtime_priority_winner_as_current() {
+        let mut providers = vec![
+            AiProviderConfigView {
+                provider: "DEEPSEEK".into(),
+                display_name: "DeepSeek".into(),
+                model: "deepseek-chat".into(),
+                configured: true,
+                enabled: true,
+                is_current: false,
+                priority: 1,
+            },
+            AiProviderConfigView {
+                provider: "TENCENT_HUNYUAN".into(),
+                display_name: "腾讯混元".into(),
+                model: "hunyuan-turbos-latest".into(),
+                configured: true,
+                enabled: true,
+                is_current: false,
+                priority: 2,
+            },
+            AiProviderConfigView {
+                provider: "DOUBAO".into(),
+                display_name: "豆包".into(),
+                model: "doubao-seed-1-6-250615".into(),
+                configured: true,
+                enabled: false,
+                is_current: false,
+                priority: 3,
+            },
+        ];
+
+        mark_current_provider(&mut providers);
+
+        assert!(providers[0].is_current);
+        assert!(!providers[1].is_current);
+        assert!(!providers[2].is_current);
     }
 }

@@ -38,6 +38,7 @@ export type AiProviderConfig = {
   model: string;
   configured: boolean;
   enabled: boolean;
+  isCurrent: boolean;
   priority: number;
 };
 

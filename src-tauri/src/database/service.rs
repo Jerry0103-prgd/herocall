@@ -1150,6 +1150,18 @@ impl DatabaseService {
             .map_err(Into::into)
     }
 
+    /// Cancels a follow by its stable security identity. A watchlist entry is intentionally
+    /// independent from holdings, transactions, quotes, news, events and AI history, so this
+    /// operation never deletes any of those records.
+    pub fn delete_watchlist_item_by_security(&self, security_id: i64) -> DatabaseResult<usize> {
+        self.connection
+            .execute(
+                "DELETE FROM watchlist_items WHERE security_id = ?1",
+                [security_id],
+            )
+            .map_err(Into::into)
+    }
+
     fn get_watchlist_item_data(&self, id: i64) -> DatabaseResult<WatchlistItemData> {
         self.connection
             .query_row(
@@ -1559,6 +1571,41 @@ impl DatabaseService {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    /// Searches only locally persisted, source-backed security metadata. It never guesses a
+    /// symbol or manufactures a company name when the local catalogue has no match.
+    pub fn search_securities(&self, query: &str, limit: usize) -> DatabaseResult<Vec<Security>> {
+        let query = query.trim();
+        if query.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut statement = self.connection.prepare(
+            "
+            SELECT id, symbol, name, market, exchange, security_type, industry, concepts_json, trade_rule
+            FROM securities
+            WHERE symbol = ?1 OR name LIKE '%' || ?1 || '%'
+            ORDER BY
+                CASE WHEN symbol = ?1 THEN 0 WHEN name = ?1 THEN 1 ELSE 2 END,
+                updated_at DESC,
+                id DESC
+            LIMIT ?2
+            ",
+        )?;
+        let rows = statement.query_map(params![query, limit as i64], |row| {
+            Ok(Security {
+                id: row.get(0)?,
+                symbol: row.get(1)?,
+                name: row.get(2)?,
+                market: row.get(3)?,
+                exchange: row.get(4)?,
+                security_type: row.get(5)?,
+                industry: row.get(6)?,
+                concepts_json: row.get(7)?,
+                trade_rule: row.get(8)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn update_security_for_portfolio(

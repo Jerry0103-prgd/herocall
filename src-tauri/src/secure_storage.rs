@@ -227,10 +227,6 @@ impl<S: DeepSeekApiKeyStore> DeepSeekApiKeyService<S> {
         self.store.remove()?;
         Ok(Self::status_view(false))
     }
-    /// Provider-only access: never expose this through Tauri IPC or logs.
-    pub fn read_for_adapter(&self) -> Result<Option<String>, SecureStorageError> {
-        self.store.read()
-    }
     fn status_view(configured: bool) -> DeepSeekStatusView {
         DeepSeekStatusView {
             status: if configured { "已配置" } else { "未配置" }.into(),
@@ -238,9 +234,6 @@ impl<S: DeepSeekApiKeyStore> DeepSeekApiKeyService<S> {
     }
 }
 
-pub fn load_deepseek_api_key_for_adapter() -> Result<Option<String>, SecureStorageError> {
-    DeepSeekApiKeyService::system().read_for_adapter()
-}
 pub fn get_deepseek_status() -> Result<DeepSeekStatusView, SecureStorageError> {
     DeepSeekApiKeyService::system().status()
 }

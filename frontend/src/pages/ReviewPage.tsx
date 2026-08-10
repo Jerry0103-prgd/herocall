@@ -91,7 +91,7 @@ export function ReviewPage() {
     }
   }
 
-  const selectedProvider = providers.find((provider) => provider.enabled && provider.configured);
+  const selectedProvider = providers.find((provider) => provider.isCurrent);
 
   return (
     <section className="page review-page" aria-labelledby="review-title">

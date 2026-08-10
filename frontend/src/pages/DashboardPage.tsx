@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { MarketIndexCard } from "../components/MarketIndexCard";
 import { DataStatusCard, type DataStatusTone } from "../components/DataStatusCard";
 import type { PageId } from "../components/Sidebar";
-import { loadDeepSeekStatus, type DeepSeekStatus } from "../services/ai";
+import { loadAiProviderConfigs, type AiProviderConfig } from "../services/ai";
 import {
   loadDashboardDataStatus,
   loadMarketSnapshot,
@@ -48,16 +48,16 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
   const [indices, setIndices] = useState<MarketIndexQuote[]>(noDataMarketSnapshot);
   const [dataStatus, setDataStatus] = useState<DashboardDataStatus>(noDataStatus);
   const [dataStatusFailed, setDataStatusFailed] = useState(false);
-  const [deepSeekStatus, setDeepSeekStatus] = useState<DeepSeekStatus | null>(null);
-  const [deepSeekStatusFailed, setDeepSeekStatusFailed] = useState(false);
+  const [aiProviders, setAiProviders] = useState<AiProviderConfig[]>([]);
+  const [aiProviderStatusFailed, setAiProviderStatusFailed] = useState(false);
   const [connectionNotice, setConnectionNotice] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const loadDashboard = useCallback(async () => {
-    const [marketResult, dataStatusResult, deepSeekResult] = await Promise.allSettled([
+    const [marketResult, dataStatusResult, providerResult] = await Promise.allSettled([
       loadMarketSnapshot(),
       loadDashboardDataStatus(),
-      loadDeepSeekStatus(),
+      loadAiProviderConfigs(),
     ]);
     if (marketResult.status === "fulfilled") setIndices(marketResult.value);
     if (dataStatusResult.status === "fulfilled") {
@@ -66,16 +66,18 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
     } else {
       setDataStatusFailed(true);
     }
-    if (deepSeekResult.status === "fulfilled") {
-      setDeepSeekStatus(deepSeekResult.value);
-      setDeepSeekStatusFailed(false);
+    if (providerResult.status === "fulfilled") {
+      setAiProviders(providerResult.value);
+      setAiProviderStatusFailed(false);
     } else {
-      setDeepSeekStatusFailed(true);
+      setAiProviderStatusFailed(true);
     }
     if (marketResult.status === "rejected") {
       setConnectionNotice("本地服务暂未返回可验证数据");
     }
   }, []);
+
+  const currentAiProvider = aiProviders.find((provider) => provider.isCurrent);
 
   useEffect(() => {
     void loadDashboard();
@@ -138,8 +140,8 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
               <div><dt>更新时间</dt><dd>{formatStatusTime(dataStatus.news.updatedAt)}</dd></div>
             </> : null}
           </DataStatusCard>
-          <DataStatusCard title="AI复盘" tone={deepSeekStatusFailed ? "failed" : deepSeekStatus?.status === "已配置" ? "success" : "empty"} headline={deepSeekStatusFailed ? "配置状态读取失败" : deepSeekStatus?.status === "已配置" ? "DeepSeek 已配置" : "未配置"}>
-            {!deepSeekStatusFailed ? <div><dt>服务</dt><dd>DeepSeek</dd></div> : null}
+          <DataStatusCard title="AI复盘" tone={aiProviderStatusFailed ? "failed" : currentAiProvider ? "success" : "empty"} headline={aiProviderStatusFailed ? "配置状态读取失败" : currentAiProvider ? "已启用" : "未启用模型"}>
+            {!aiProviderStatusFailed && currentAiProvider ? <><div><dt>当前模型</dt><dd>{currentAiProvider.displayName}</dd></div><div><dt>模型标识</dt><dd>{currentAiProvider.model}</dd></div></> : null}
           </DataStatusCard>
         </div>
       </section>
@@ -152,7 +154,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
         <div className="quick-link-grid">
           <button className="quick-link-card quick-link-card--primary" disabled={isRefreshing} onClick={() => void refreshMarketData()} type="button"><span>01</span><strong>{isRefreshing ? "正在更新…" : "更新今日市场快照"}</strong><small>保存本次市场、资讯与事件数据</small></button>
           <button className="quick-link-card" onClick={() => onNavigate("holdings")} type="button"><span>02</span><strong>我的关注</strong><small>查看当前关注标的</small></button>
-          <button className="quick-link-card" onClick={() => onNavigate("news")} type="button"><span>03</span><strong>财经资讯</strong><small>阅读关联资讯与来源</small></button>
+          <button className="quick-link-card" onClick={() => onNavigate("news")} type="button"><span>03</span><strong>个股资讯</strong><small>阅读关联资讯与来源</small></button>
           <button className="quick-link-card" onClick={() => onNavigate("review")} type="button"><span>04</span><strong>AI复盘</strong><small>生成并查看当日复盘</small></button>
         </div>
       </section>
