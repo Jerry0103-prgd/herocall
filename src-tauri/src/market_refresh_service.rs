@@ -58,6 +58,7 @@ pub enum MarketRefreshError {
     Database(DatabaseError),
     Store(MarketStoreError),
     Portfolio(PortfolioUiError),
+    MissingFollowedSecurity,
 }
 
 impl fmt::Display for MarketRefreshError {
@@ -66,6 +67,7 @@ impl fmt::Display for MarketRefreshError {
             Self::Database(error) => write!(formatter, "database error: {error}"),
             Self::Store(error) => write!(formatter, "market snapshot storage error: {error}"),
             Self::Portfolio(error) => write!(formatter, "portfolio error: {error}"),
+            Self::MissingFollowedSecurity => formatter.write_str("未找到需要刷新的关注标的"),
         }
     }
 }
@@ -93,6 +95,36 @@ impl From<PortfolioUiError> for MarketRefreshError {
 pub struct MarketRefreshService;
 
 impl MarketRefreshService {
+    /// Refreshes exactly one followed security after it has been saved. This deliberately does
+    /// not create a manual-refresh run and never requests indices, news, events, or other
+    /// followed securities. A provider NO_DATA response is persisted as source status and is
+    /// returned to the caller without undoing the already-saved follow relationship.
+    pub fn refresh_followed_security_quote(
+        database: &DatabaseService,
+        security_id: i64,
+    ) -> Result<MarketRefreshView, MarketRefreshError> {
+        let security = database
+            .list_market_securities_for_holdings()?
+            .into_iter()
+            .find(|security| security.security_id == security_id)
+            .ok_or(MarketRefreshError::MissingFollowedSecurity)?;
+        let snapshot = Self::fetch_holding_snapshot(std::slice::from_ref(&security));
+        Self::persist_single_security_snapshot(database, snapshot)
+    }
+
+    fn persist_single_security_snapshot(
+        database: &DatabaseService,
+        snapshot: MarketSnapshot,
+    ) -> Result<MarketRefreshView, MarketRefreshError> {
+        database.save_market_snapshot_with_id(&snapshot)?;
+        let configuration_status = if TushareAdapter::is_configured() {
+            "CONFIGURED"
+        } else {
+            "PUBLIC_ONLY"
+        };
+        Ok(Self::to_view(snapshot, configuration_status))
+    }
+
     /// Performs exactly one user-initiated collection. There is no scheduler, polling loop, or
     /// persistent connection: every provider request originates from this command invocation.
     pub fn refresh_today_snapshot(
@@ -359,6 +391,8 @@ mod tests {
 
     struct RecordedAdapter;
 
+    struct UnavailableAdapter;
+
     impl MarketDataAdapter for RecordedAdapter {
         fn source(&self) -> MarketDataSource {
             MarketDataSource {
@@ -392,6 +426,21 @@ mod tests {
                     market_timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 7, 0, 0).unwrap(),
                 })
                 .collect())
+        }
+    }
+
+    impl MarketDataAdapter for UnavailableAdapter {
+        fn source(&self) -> MarketDataSource {
+            RecordedAdapter.source()
+        }
+
+        fn fetch(
+            &self,
+            _: &MarketFetchRequest,
+        ) -> Result<Vec<RawMarketQuote>, crate::market_service::MarketAdapterError> {
+            Err(crate::market_service::MarketAdapterError::Unavailable(
+                "recorded provider failure".into(),
+            ))
         }
     }
 
@@ -495,5 +544,86 @@ mod tests {
         assert_eq!(section.source, "东方财富公开行情");
         assert_eq!(section.status, "DELAYED");
         assert_eq!(section.updated_at, Some(timestamp.to_rfc3339()));
+    }
+
+    #[test]
+    fn single_follow_quote_snapshot_persists_only_the_new_follow_quote() {
+        let database = DatabaseService::open_in_memory().expect("open database");
+        let security = database
+            .create_security(NewSecurity {
+                symbol: "002428".into(),
+                name: "云南锗业".into(),
+                market: "SZSE".into(),
+                exchange: "SZSE".into(),
+                security_type: "STOCK".into(),
+                industry: None,
+                concepts_json: "[]".into(),
+                trade_rule: "UNKNOWN".into(),
+            })
+            .expect("create follow security");
+        database
+            .create_watchlist_item(security.id)
+            .expect("save follow before quote refresh");
+        let request = MarketFetchRequest::now(
+            vec![MarketSecurity {
+                security_id: security.id,
+                symbol: "002428".into(),
+                name: "云南锗业".into(),
+                market: "SZSE".into(),
+            }],
+            MarketPhase::Unknown,
+        );
+        let snapshot = MarketService::fetch_snapshot(&RecordedAdapter, &request);
+        let view = MarketRefreshService::persist_single_security_snapshot(&database, snapshot)
+            .expect("persist one source-backed quote");
+
+        assert_eq!(view.quote_count, 1);
+        assert_ne!(view.status, "NO_DATA");
+        let follows = database
+            .list_watchlist_item_data()
+            .expect("reload watchlist after single quote");
+        assert_eq!(follows.len(), 1);
+        assert_eq!(follows[0].symbol, "002428");
+        assert_eq!(follows[0].current_price.as_deref(), Some("12.00"));
+        assert_eq!(follows[0].change_percent.as_deref(), Some("1.6949"));
+    }
+
+    #[test]
+    fn no_data_quote_snapshot_does_not_remove_saved_follow() {
+        let database = DatabaseService::open_in_memory().expect("open database");
+        let security = database
+            .create_security(NewSecurity {
+                symbol: "002428".into(),
+                name: "云南锗业".into(),
+                market: "SZSE".into(),
+                exchange: "SZSE".into(),
+                security_type: "STOCK".into(),
+                industry: None,
+                concepts_json: "[]".into(),
+                trade_rule: "UNKNOWN".into(),
+            })
+            .expect("create follow security");
+        database
+            .create_watchlist_item(security.id)
+            .expect("save follow before no-data response");
+        let request = MarketFetchRequest::now(
+            vec![MarketSecurity {
+                security_id: security.id,
+                symbol: "002428".into(),
+                name: "云南锗业".into(),
+                market: "SZSE".into(),
+            }],
+            MarketPhase::Unknown,
+        );
+        let snapshot = MarketService::fetch_snapshot(&UnavailableAdapter, &request);
+        let view = MarketRefreshService::persist_single_security_snapshot(&database, snapshot)
+            .expect("record no-data source state");
+
+        assert_eq!(view.status, "NO_DATA");
+        let follows = database
+            .list_watchlist_item_data()
+            .expect("saved follow remains after quote failure");
+        assert_eq!(follows.len(), 1);
+        assert_eq!(follows[0].current_price, None);
     }
 }

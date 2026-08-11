@@ -61,6 +61,20 @@ export function createWatchlistItem(input: CreateWatchlistInput): Promise<Portfo
   return invoke<PortfolioHolding>("create_watchlist_item", { input });
 }
 
+export type FollowedSecurityQuoteRefresh = {
+  source: string;
+  configurationStatus: string;
+  status: string;
+  quoteCount: number;
+  marketTimestamp: string | null;
+  fetchedAt: string;
+  message: string | null;
+};
+
+export function refreshFollowedSecurityQuote(securityId: number): Promise<FollowedSecurityQuoteRefresh> {
+  return invoke<FollowedSecurityQuoteRefresh>("refresh_followed_security_quote", { securityId });
+}
+
 export function searchWatchlistSecurities(query: string): Promise<SecurityLookup[]> {
   return invoke<SecurityLookup[]>("search_watchlist_securities", { query });
 }

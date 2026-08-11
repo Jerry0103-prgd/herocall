@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { WatchlistForm } from "../components/WatchlistForm";
 import {
   createWatchlistItem,
+  refreshFollowedSecurityQuote,
   removeFollowedSecurityCompletely,
   loadPortfolioHoldings,
   type CreateWatchlistInput,
@@ -34,10 +35,24 @@ export function PortfolioPage() {
 
   async function save(input: CreateWatchlistInput) {
     setIsSaving(true);
+    setMessage(null);
     try {
-      await createWatchlistItem(input);
+      const followed = await createWatchlistItem(input);
       setIsFormOpen(false);
       await refresh();
+      try {
+        const quote = await refreshFollowedSecurityQuote(followed.securityId);
+        await refresh();
+        if (quote.status === "NO_DATA" || quote.quoteCount === 0) {
+          setMessage("已加入关注列表。行情暂未获取，可稍后刷新。");
+        } else {
+          setMessage("已加入关注列表，当前行情已更新。");
+        }
+      } catch {
+        // The persisted follow is authoritative. Quote retrieval is deliberately best-effort and
+        // must never turn a successful follow into a failed form submission.
+        setMessage("已加入关注列表。行情暂未获取，可稍后刷新。");
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "关注标的保存失败");
     } finally {

@@ -115,6 +115,20 @@ fn create_watchlist_item(
     PortfolioUiService::create_watchlist(&database, input).map_err(|error| error.to_string())
 }
 
+/// Fetches and stores a quote for one already-saved followed security. It intentionally does not
+/// refresh indices, other follows, news or events; callers must treat a NO_DATA result as a quote
+/// issue only, never as a failure to save the follow relationship.
+#[tauri::command]
+fn refresh_followed_security_quote(
+    app: tauri::AppHandle,
+    security_id: i64,
+) -> Result<MarketRefreshView, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    MarketRefreshService::refresh_followed_security_quote(&database, security_id)
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn search_watchlist_securities(
     app: tauri::AppHandle,
@@ -376,6 +390,7 @@ pub fn run() {
             get_portfolio_holdings,
             create_portfolio_holding,
             create_watchlist_item,
+            refresh_followed_security_quote,
             search_watchlist_securities,
             update_portfolio_holding,
             delete_portfolio_holding,

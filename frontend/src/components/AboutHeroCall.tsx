@@ -7,6 +7,17 @@ type ReleaseNote = {
 
 const releaseNotes: ReleaseNote[] = [
   {
+    version: "V1.0.12",
+    date: "2026-08-11",
+    summary: "新增关注后自动获取单只行情",
+    groups: [
+      { title: "优化", items: [
+        "加入关注列表后仅刷新该证券的真实行情，不刷新指数、资讯、事件或其他关注标的",
+        "行情暂未获取时保留关注关系，并在列表中明确显示暂无数据提示",
+      ] },
+    ],
+  },
+  {
     version: "V1.0.11",
     date: "2026-08-11",
     summary: "Windows 应用图标修复",
