@@ -83,6 +83,12 @@ Phase 7-D 的 Dashboard 通过 `refresh_today_market_snapshot` Command 调用 `m
 
 用户手动更新市场快照时，`market_refresh_service` 同步持久化本次公告和财经快讯的情报关联，并以 `manual_refresh_intelligence_items` 冻结本次范围。AI Research Agent 只读取当前 `manual_refresh_run` 的情报摘要：A/B 条目进入 `verifiedIntelligence`，社区观点和传闻置于单独字段并有“不得作为事实”的规则。市场雷达只使用本地保存、带来源与时区的未来事件，按未来 24 小时、3 天和 7 天显示；对非公告/交易所/监管来源的事件以 C 级而非官方事实显示。
 
+## 5.3 V1.1.2 AI Research Engine V2
+
+`security_profiles` 为每只关注标的建立独立、可追溯的股票画像边界。新关注标的只创建 `PENDING` 画像，绝不从代码或名称推断公司、行业、板块、标签或商业模式；资料缺失时界面明确显示“正在建立股票画像”。`ai_research_reports` 保存每次新生成报告的核心驱动、市场交易逻辑、多空博弈、未来催化、风险因素、研究评分及冻结研究上下文；既有 `ai_reviews` 和历史报告不重写，仍可读取。
+
+`ai_service` 仅从同一 `research_run`/`manual_refresh_run` 中已保存、带来源与时间的行情、公告、资讯、事件和市场情报组装 Evidence Context。A/B 级资料可作为事实，C 级仅作行业参考，D 级只能作为社区情绪，E 级只能作为风险或待核验线索。Provider 输出必须引用该 Context 中的 evidence id；Rust 在落库前验证 V2 JSON 结构、证据归属、催化时间窗口、风险高/中/低排序、研究评分范围及禁止的直接交易指令。失败不会创建报告或改写市场数据。
+
 ## 6. 建议的交付顺序
 
 已建立 Rust Portfolio Engine、Market Data Adapter 契约及 SQLite 快照持久化。行情层包含 Tushare 日线 Adapter（仅 `CLOSED`）、东方财富公开行情 Adapter 和腾讯公开行情 Adapter（公开源始终 `DELAYED`）；HTTP 传输使用系统 `curl`，Tushare Token 只由系统凭据库读取并经标准输入传递，不进入命令行或日志。任何真实数据源接入之前，不向 UI 提供虚假“实时”状态。Portfolio Engine 按已确认交易日顺序处理流水；交易日有效性仍由交易日历模块在后续阶段提供。

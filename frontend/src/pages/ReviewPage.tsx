@@ -6,6 +6,7 @@ import {
   loadAiReviewsForDate,
   type AiReview,
   type AiProviderConfig,
+  type ResearchScore,
 } from "../services/ai";
 
 const reportLabels = [
@@ -35,6 +36,30 @@ function safeErrorMessage(error: unknown) {
   return "AI复盘服务暂不可用";
 }
 
+const impactStars: Record<string, string> = { HIGH: "★★★★★", MEDIUM: "★★★", LOW: "★★" };
+const riskLabel: Record<string, string> = { HIGH: "高风险", MEDIUM: "中风险", LOW: "低风险" };
+const catalystLabel: Record<string, string> = { "1D": "未来1天", "3D": "未来3天", "7D": "未来7天" };
+
+function ScoreMetric({ label, value }: { label: string; value: number }) {
+  return <div className="research-score-metric"><span>{label}</span><strong>{value}</strong><div aria-hidden="true"><i style={{ width: `${Math.max(0, Math.min(value, 100))}%` }} /></div></div>;
+}
+
+function ResearchScoreCard({ score }: { score: ResearchScore }) {
+  return <section className="research-card research-score-card"><div className="research-card-heading"><p className="section-kicker">Research score</p><h4>AI研究评分</h4><strong className="research-score-overall">{score.overall}</strong></div><p>研究状态评分，不是涨跌预测或投资建议。</p><div className="research-score-grid"><ScoreMetric label="基本面关注度" value={score.fundamentalAttention} /><ScoreMetric label="技术状态" value={score.technicalState} /><ScoreMetric label="市场热度" value={score.marketHeat} /><ScoreMetric label="情绪状态" value={score.sentimentState} /><ScoreMetric label="风险水平" value={score.riskLevel} /></div><small>{score.explanation}</small></section>;
+}
+
+function ResearchV2Cards({ review }: { review: AiReview }) {
+  const report = review.report!;
+  return <section className="research-v2-grid" aria-label="AI研究报告 V2">
+    <section className="research-card drivers-card"><div className="research-card-heading"><p className="section-kicker">Core drivers</p><h4>今日核心驱动</h4></div><ol>{report.coreDrivers?.map((driver) => <li key={`${driver.title}-${driver.impactLevel}`}><div><strong>{driver.title}</strong><span className={`impact impact--${driver.impactLevel.toLowerCase()}`}>影响程度：{impactStars[driver.impactLevel]}</span></div><p>{driver.rationale}</p><small>依据：{driver.evidenceIds.join(" · ")}</small></li>)}</ol></section>
+    {report.marketThesis ? <section className="research-card thesis-card"><div className="research-card-heading"><p className="section-kicker">Market thesis</p><h4>市场交易逻辑</h4></div><p className="thesis-summary">{report.marketThesis.summary}</p><dl><div><dt>事实</dt><dd>{report.marketThesis.facts}</dd></div><div><dt>市场预期</dt><dd>{report.marketThesis.expectations}</dd></div><div><dt>情绪驱动</dt><dd>{report.marketThesis.sentiment}</dd></div></dl><small>依据：{report.marketThesis.evidenceIds.join(" · ")}</small></section> : null}
+    {report.bullBearAnalysis ? <section className="research-card bull-bear-card"><div className="research-card-heading"><p className="section-kicker">Bull / bear</p><h4>多空博弈</h4></div><div className="bull-bear-columns"><div><strong>看多逻辑</strong><ul>{report.bullBearAnalysis.bull.map((point) => <li key={point.view}><b>{point.view}</b><span>依据：{point.basis}</span></li>)}</ul></div><div><strong>看空逻辑</strong><ul>{report.bullBearAnalysis.bear.map((point) => <li key={point.view}><b>{point.view}</b><span>依据：{point.basis}</span></li>)}</ul></div></div><p className="key-divergence"><strong>当前最大分歧：</strong>{report.bullBearAnalysis.keyDivergence}</p></section> : null}
+    <section className="research-card catalysts-card"><div className="research-card-heading"><p className="section-kicker">Catalysts</p><h4>未来催化</h4></div><div className="catalyst-list">{report.futureCatalysts?.map((item) => <article key={`${item.timeWindow}-${item.title}`}><strong>{catalystLabel[item.timeWindow] ?? item.timeWindow}</strong><div><b>{item.title}</b><span>{item.source} · {item.credibility}级 · {item.time}</span></div></article>)}</div></section>
+    <section className="research-card risks-card"><div className="research-card-heading"><p className="section-kicker">Risk factors</p><h4>风险因素</h4></div><ol>{report.riskFactors?.map((risk) => <li key={`${risk.level}-${risk.title}`}><span className={`risk-level risk-level--${risk.level.toLowerCase()}`}>{riskLabel[risk.level] ?? risk.level}</span><div><strong>{risk.title}</strong><p>{risk.reason}</p></div></li>)}</ol></section>
+    {report.researchScore ? <ResearchScoreCard score={report.researchScore} /> : null}
+  </section>;
+}
+
 function ReportTable({ review }: { review: AiReview }) {
   const title = `${review.securityName ?? "未确认标的"}${review.securitySymbol ? ` · ${review.securitySymbol}` : ""}`;
   return (
@@ -43,7 +68,7 @@ function ReportTable({ review }: { review: AiReview }) {
         <div><p className="section-kicker">{review.model}</p><h3>{title}</h3></div>
         <span>仅供信息整理与观察，不构成交易建议。</span>
       </div>
-      <div className="ai-report-table-scroll"><table className="ai-report-table"><thead><tr><th>分析维度</th><th>AI复盘结果</th></tr></thead><tbody>{reportLabels.map(([label, key]) => <tr key={key}><th scope="row">{label}</th><td>{review.report?.[key] ?? "暂无数据"}</td></tr>)}</tbody></table></div>
+      {review.report?.coreDrivers?.length ? <ResearchV2Cards review={review} /> : <div className="ai-report-table-scroll"><table className="ai-report-table"><thead><tr><th>分析维度</th><th>AI复盘结果</th></tr></thead><tbody>{reportLabels.map(([label, key]) => <tr key={key}><th scope="row">{label}</th><td>{review.report?.[key] ?? "暂无数据"}</td></tr>)}</tbody></table></div>}
       <details className="ai-audit-details"><summary>查看 FACTS / INFERENCES / RISKS 审计依据</summary><div className="ai-audit-grid"><section><strong>FACTS</strong><ul>{review.facts.map((item) => <li key={item}>{item}</li>)}</ul></section><section><strong>INFERENCES</strong><ul>{review.inferences.map((item) => <li key={item}>{item}</li>)}</ul></section><section><strong>RISKS</strong><ul>{review.risks.map((item) => <li key={item}>{item}</li>)}</ul></section></div></details>
     </article>
   );

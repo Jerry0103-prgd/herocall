@@ -29,7 +29,34 @@ export type AiResearchReport = {
   strategyReference: string;
   conclusion: string;
   actions: string;
+  coreDrivers?: ResearchDriver[];
+  marketThesis?: MarketThesis;
+  bullBearAnalysis?: BullBearAnalysis;
+  futureCatalysts?: FutureCatalyst[];
+  riskFactors?: RiskFactor[];
+  researchScore?: ResearchScore;
 };
+
+export type ResearchDriver = {
+  title: string;
+  rationale: string;
+  impactLevel: "HIGH" | "MEDIUM" | "LOW";
+  evidenceIds: string[];
+};
+
+export type MarketThesis = {
+  summary: string;
+  facts: string;
+  expectations: string;
+  sentiment: string;
+  evidenceIds: string[];
+};
+
+export type BullBearPoint = { view: string; basis: string; evidenceIds: string[] };
+export type BullBearAnalysis = { bull: BullBearPoint[]; bear: BullBearPoint[]; keyDivergence: string; evidenceIds: string[] };
+export type FutureCatalyst = { timeWindow: "1D" | "3D" | "7D"; title: string; source: string; credibility: string; time: string; evidenceIds: string[] };
+export type RiskFactor = { level: "HIGH" | "MEDIUM" | "LOW"; title: string; reason: string; evidenceIds: string[] };
+export type ResearchScore = { fundamentalAttention: number; technicalState: number; marketHeat: number; sentimentState: number; riskLevel: number; overall: number; explanation: string };
 
 export type DeepSeekStatus = { status: "已配置" | "未配置" };
 

@@ -36,7 +36,7 @@
 | `event_security_links` | `event_id`, `security_id` | 事件与证券的多对多关联；删除一只关注标的时保护其他证券仍需的事件正文 |
 | `app_settings` | `setting_key`, `setting_value`, `updated_at` | 非敏感应用状态；V0.8.1 仅保存首次启动完成标志，禁止存储 API Key、Token 或券商信息 |
 
-`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）至 `022`（市场情报与市场雷达）；迁移重复执行不会重新执行已应用版本，已应用迁移的校验标识不匹配会阻止继续启动。
+`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）至 `023`（AI Research Engine V2）；迁移重复执行不会重新执行已应用版本，已应用迁移的校验标识不匹配会阻止继续启动。
 
 ### V1.1.0 Research Agent 追加实体（迁移 `021`）
 
@@ -58,6 +58,16 @@
 | `ai_review_contexts.intelligence_json` | JSON | 迁移 `022` 新增的冻结情报摘要。A/B 验证信息、社区观点与传闻分区保存；不保存 Key 或完整提示词。 |
 
 迁移 `022` 只新增三张表、索引及一个带默认值的审计列，不删除或变更既有新闻、事件、AI 记录和用户数据。
+
+### V1.1.2 AI Research Engine V2 追加实体（迁移 `023`）
+
+| 表/字段 | 主要字段 | 说明 |
+| --- | --- | --- |
+| `security_profiles` | `security_id`, `profile_status`, `company_description`, `industry`, `sector`, `tags_json`, `business_model`, `historical_characteristics`, `source*` | 每只证券一条独立画像。迁移仅为既有关注标的建立 `PENDING` 空画像，不依据名称或代码制造公司/行业事实。 |
+| `ai_research_reports` | `ai_review_id`, `security_id`, `core_drivers_json`, `market_thesis_json`, `bull_bear_analysis_json`, `future_catalysts_json`, `risk_factors_json`, `research_score_json`, `research_context_json` | 新版结构化研究报告的可审计副本；与 `ai_reviews` 一对一，删除其所属证券时级联清理，不影响其他证券。 |
+| `ai_review_contexts.research_context_json` | JSON | 本次 V2 报告允许使用的证据目录、资料分层与画像状态冻结载荷；不保存 API Key 或完整 Prompt。 |
+
+迁移 `023` 仅增加上述表、索引与带默认值的审计列；旧 AI 报告和旧 Context 保持可读。风险、观点和研究评分均为报告字段，不替代真实行情、公告或用户的投资决定。
 
 ## 3. 延后实现的逻辑实体
 

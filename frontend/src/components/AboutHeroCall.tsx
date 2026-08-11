@@ -7,6 +7,18 @@ type ReleaseNote = {
 
 const releaseNotes: ReleaseNote[] = [
   {
+    version: "V1.1.2",
+    date: "2026-08-11",
+    summary: "AI Research Engine Upgrade",
+    groups: [
+      { title: "升级", items: [
+        "升级AI研究能力，引入核心驱动分析、市场交易逻辑、多空观点、未来催化、风险因素及股票画像，让AI复盘从资讯总结升级为结构化研究分析。",
+        "新增可审计的研究评分与 Evidence Context 证据校验",
+        "新增股票画像待建立状态，缺少可验证资料时不补造公司事实",
+      ] },
+    ],
+  },
+  {
     version: "V1.1.1",
     date: "2026-08-11",
     summary: "市场情报与市场雷达",

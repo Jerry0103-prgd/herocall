@@ -119,6 +119,11 @@ const MIGRATIONS: &[Migration] = &[
         checksum: "market-intelligence-022-v1",
         sql: include_str!("../../migrations/022_market_intelligence.sql"),
     },
+    Migration {
+        version: "023",
+        checksum: "ai-research-engine-v2-023-v1",
+        sql: include_str!("../../migrations/023_ai_research_engine_v2.sql"),
+    },
 ];
 
 pub(super) fn apply(connection: &mut Connection) -> DatabaseResult<()> {
@@ -201,4 +206,9 @@ pub(super) fn apply_018_for_upgrade_test(connection: &mut Connection) -> Databas
 #[cfg(test)]
 pub(super) fn apply_021_for_upgrade_test(connection: &mut Connection) -> DatabaseResult<()> {
     apply_migrations(connection, &MIGRATIONS[..21])
+}
+
+#[cfg(test)]
+pub(super) fn apply_022_for_upgrade_test(connection: &mut Connection) -> DatabaseResult<()> {
+    apply_migrations(connection, &MIGRATIONS[..22])
 }

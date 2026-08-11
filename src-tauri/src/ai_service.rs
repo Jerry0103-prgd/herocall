@@ -17,8 +17,8 @@ use serde_json::{json, Value};
 
 use crate::{
     database::service::{
-        AiReview, DatabaseError, DatabaseService, NewAiReview, NewAiReviewContext,
-        NewResearchEvidence,
+        AiReview, DatabaseError, DatabaseService, NewAiResearchReport, NewAiReview,
+        NewAiReviewContext, NewResearchEvidence, SecurityProfile,
     },
     event_service::{EventService, EventServiceError, EventView},
     intelligence_service::{IntelligenceService, IntelligenceServiceError},
@@ -33,7 +33,7 @@ use crate::{
     },
 };
 
-const PROMPT_VERSION: &str = "research-agent-evidence-v1";
+const PROMPT_VERSION: &str = "research-agent-evidence-v2";
 const DEEPSEEK_MODEL: &str = "deepseek-chat";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -90,6 +90,94 @@ pub struct AiReviewSections {
     pub conclusion: Option<String>,
     #[serde(default, rename = "actions")]
     pub actions: Option<String>,
+    #[serde(default, alias = "core_drivers")]
+    pub core_drivers: Option<Vec<ResearchDriver>>,
+    #[serde(default, alias = "market_thesis")]
+    pub market_thesis: Option<MarketThesis>,
+    #[serde(default, alias = "bull_bear_analysis")]
+    pub bull_bear_analysis: Option<BullBearAnalysis>,
+    #[serde(default, alias = "future_catalysts")]
+    pub future_catalysts: Option<Vec<FutureCatalyst>>,
+    #[serde(default, alias = "risk_factors")]
+    pub risk_factors: Option<Vec<RiskFactor>>,
+    #[serde(default, alias = "research_score")]
+    pub research_score: Option<ResearchScore>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResearchDriver {
+    pub title: String,
+    pub rationale: String,
+    pub impact_level: String,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketThesis {
+    pub summary: String,
+    pub facts: String,
+    pub expectations: String,
+    pub sentiment: String,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BullBearPoint {
+    pub view: String,
+    pub basis: String,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BullBearAnalysis {
+    #[serde(default)]
+    pub bull: Vec<BullBearPoint>,
+    #[serde(default)]
+    pub bear: Vec<BullBearPoint>,
+    pub key_divergence: String,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FutureCatalyst {
+    pub time_window: String,
+    pub title: String,
+    pub source: String,
+    pub credibility: String,
+    pub time: String,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RiskFactor {
+    pub level: String,
+    pub title: String,
+    pub reason: String,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResearchScore {
+    pub fundamental_attention: u8,
+    pub technical_state: u8,
+    pub market_heat: u8,
+    pub sentiment_state: u8,
+    pub risk_level: u8,
+    pub overall: u8,
+    pub explanation: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -104,6 +192,18 @@ pub struct AiResearchReport {
     pub conclusion: String,
     #[serde(default)]
     pub actions: String,
+    #[serde(default)]
+    pub core_drivers: Vec<ResearchDriver>,
+    #[serde(default)]
+    pub market_thesis: Option<MarketThesis>,
+    #[serde(default)]
+    pub bull_bear_analysis: Option<BullBearAnalysis>,
+    #[serde(default)]
+    pub future_catalysts: Vec<FutureCatalyst>,
+    #[serde(default)]
+    pub risk_factors: Vec<RiskFactor>,
+    #[serde(default)]
+    pub research_score: Option<ResearchScore>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -142,6 +242,7 @@ pub struct AiReviewInput {
     pub security: Value,
     pub sector: Value,
     pub intelligence: Value,
+    pub research_context: Value,
     pub security_id: i64,
     pub security_name: String,
     pub security_symbol: String,
@@ -237,7 +338,7 @@ impl AiProviderAdapter for OpenAiCompatibleProviderAdapter {
 }
 
 fn research_report_system_prompt() -> &'static str {
-    "你是个人股票研究与复盘助手。仅依据输入 JSON 的 Evidence Context，输出严格 JSON 对象，必须包含：facts:[string]、inferences:[string]、actions:string、risks:[string]、stock_status:string、market_analysis:string、sector_analysis:string、news_analysis:string、technical_analysis:string、strategy_reference:string、conclusion:string。FACTS 只能陈述带 source、时间或 evidence 的输入事实；INFERENCES 必须说明基于哪些事实推断；ACTIONS 是研究型的条件化策略参考；RISKS 只列不确定性、数据缺失或需核验事项。逐项输出：当前个股情况、市场环境、所属板块/行业、消息面、技术面、策略参考、综合结论。技术面只能基于 technical 字段；sector.status 为 UNAVAILABLE 或资料缺失时，必须写“暂无可验证板块数据”，不得猜测行业或概念。intelligence.verifiedIntelligence 中仅 A/B 级信息可作为事实；communityOpinion 只能称为社区观点，rumors 只能作为未证实传闻、风险或观察项，绝不可作为 FACTS。不得提及持仓成本、盈亏、是否实际持仓或账户资产。允许以条件化语言表达买入、卖出、加仓、减仓、持有、观望、止盈、止损等研究动作，但必须给出触发条件、依据与风险；严禁目标价、收益预测、收益承诺、保证收益、必涨、必跌、稳赚或任何未来确定性陈述。数据缺失时明确“暂无数据”或“未确认”，绝不补造事实。"
+    "你是个人股票研究与复盘助手。仅依据输入 JSON 的 Evidence Context 输出严格 JSON 对象。必须包含既有审计字段 facts:[string]、inferences:[string]、risks:[string]、stock_status:string、market_analysis:string、sector_analysis:string、news_analysis:string、technical_analysis:string、strategy_reference:string、conclusion:string、actions:string，以及 Research Report V2 字段：coreDrivers:[{title,rationale,impactLevel,evidenceIds}]、marketThesis:{summary,facts,expectations,sentiment,evidenceIds}、bullBearAnalysis:{bull:[{view,basis,evidenceIds}],bear:[{view,basis,evidenceIds}],keyDivergence,evidenceIds}、futureCatalysts:[{timeWindow,title,source,credibility,time,evidenceIds}]、riskFactors:[{level,title,reason,evidenceIds}]、researchScore:{fundamentalAttention,technicalState,marketHeat,sentimentState,riskLevel,overall,explanation}。每一个 V2 分析条目必须列出 evidenceIds：只能使用输入 researchContext.allowedEvidenceIds 中的 ID；资料不足时使用 NO_DATA，并写“暂无数据”或“未确认”。今日核心驱动必须解释当日涨跌/波动的已知驱动与当前交易逻辑，而非罗列新闻；impactLevel 仅能为 HIGH、MEDIUM、LOW。marketThesis 必须明确分开 facts（事实）、expectations（市场预期）、sentiment（情绪驱动）。bullBearAnalysis 只分析市场多空观点与最大分歧，严禁给出交易指令。futureCatalysts 仅列输入事件或情报支持的 1D/3D/7D 催化，每项必须带来源、可信度、时间。riskFactors 必须按 HIGH、MEDIUM、LOW 顺序，并说明原因。researchScore 的六项值只能为 0-100，是当前研究状态评分，非涨跌预测、非投资建议，explanation 必须说明依据和局限。FACTS 只能陈述带 source、时间或 evidence 的输入事实；INFERENCES 必须说明基于哪些事实推断；RISKS 只列不确定性、数据缺失或需核验事项。技术面只能基于 technical 字段；profile.status 非 VERIFIED 或资料缺失时，必须写“暂无可验证股票画像”，不得猜测公司、行业、板块或概念。intelligence.verifiedIntelligence 中仅 A/B 级信息可作为事实；C 级仅可作为行业参考；communityOpinion 只能称为社区观点或情绪线索，rumors 只能作为未证实传闻、风险或观察项，绝不可作为 FACTS。不得提及持仓成本、盈亏、是否实际持仓或账户资产。不得输出买入、卖出、加仓、减仓、建仓、清仓、止盈、止损、目标价、收益预测、收益承诺、保证收益、必涨、必跌、稳赚或任何未来确定性/交易建议；actions 只能写“本报告不提供交易建议，建议持续观察的证据条件：…”。数据缺失时明确“暂无数据”或“未确认”，绝不补造事实。"
 }
 
 fn provider_display_name(provider: &str) -> &'static str {
@@ -549,6 +650,7 @@ impl AiService {
             security: json!({"name": "历史综合复盘", "status": "LEGACY"}),
             sector: json!({"status": "UNAVAILABLE"}),
             intelligence: json!({"status": "NO_DATA"}),
+            research_context: json!({"status": "NO_DATA", "allowedEvidenceIds": ["NO_DATA"]}),
             security_id: 0,
             security_name: "历史综合复盘".into(),
             security_symbol: String::new(),
@@ -575,6 +677,7 @@ impl AiService {
             news_json: serde_json::to_string(&input.news)?,
             events_json: serde_json::to_string(&input.events)?,
             intelligence_json: serde_json::to_string(&input.intelligence)?,
+            research_context_json: serde_json::to_string(&input.research_context)?,
         })?;
         ai_diagnostic(format!(
             "ai_review_context_written=true context_id={context_id}"
@@ -649,23 +752,35 @@ impl AiService {
                 run.id,
                 security.security_id,
             )?;
+            let market = json!({
+                "holding": holding_quotes,
+                "indices": index_quotes,
+                "technical": technical,
+                "snapshotCompletedAt": run.completed_at,
+            });
+            let news = json!({"status": if news_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": news_items});
+            let events = json!({"status": if event_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": event_items});
+            let research_context = build_research_context(
+                database,
+                security.security_id,
+                &market,
+                &news,
+                &events,
+                &intelligence,
+            )?;
             let input = AiReviewInput {
                 prompt_version: PROMPT_VERSION.into(),
                 manual_refresh_run_id: run.id,
                 research_run_id,
                 daily_review: daily_review.clone(),
                 portfolio: Value::Null,
-                market: json!({
-                    "holding": holding_quotes,
-                    "indices": index_quotes,
-                    "technical": technical,
-                    "snapshotCompletedAt": run.completed_at,
-                }),
-                news: json!({"status": if news_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": news_items}),
-                events: json!({"status": if event_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": event_items}),
+                market,
+                news,
+                events,
                 security: security_context,
                 sector: json!({"status": "UNAVAILABLE", "reason": "当前没有可靠板块数据源"}),
                 intelligence,
+                research_context,
                 security_id: security.security_id,
                 security_name: security.name,
                 security_symbol: security.symbol,
@@ -695,6 +810,7 @@ impl AiService {
         let sections = provider.generate(input)?;
         validate_sections(&sections)?;
         let report = report_from_sections(&sections)?;
+        validate_report_against_evidence(&report, &input.research_context)?;
         let context_id = database.create_ai_review_context(NewAiReviewContext {
             review_id: input.daily_review.id,
             manual_refresh_run_id: input.manual_refresh_run_id,
@@ -704,6 +820,7 @@ impl AiService {
             news_json: serde_json::to_string(&input.news)?,
             events_json: serde_json::to_string(&input.events)?,
             intelligence_json: serde_json::to_string(&input.intelligence)?,
+            research_context_json: serde_json::to_string(&input.research_context)?,
         })?;
         let stored = database.create_ai_review(NewAiReview {
             review_id: input.daily_review.id,
@@ -718,6 +835,19 @@ impl AiService {
             security_id: Some(input.security_id),
             research_run_id: input.research_run_id,
         })?;
+        if report.is_v2() {
+            database.create_ai_research_report(NewAiResearchReport {
+                ai_review_id: stored.id,
+                security_id: input.security_id,
+                core_drivers_json: serde_json::to_string(&report.core_drivers)?,
+                market_thesis_json: serde_json::to_string(&report.market_thesis)?,
+                bull_bear_analysis_json: serde_json::to_string(&report.bull_bear_analysis)?,
+                future_catalysts_json: serde_json::to_string(&report.future_catalysts)?,
+                risk_factors_json: serde_json::to_string(&report.risk_factors)?,
+                research_score_json: serde_json::to_string(&report.research_score)?,
+                research_context_json: serde_json::to_string(&input.research_context)?,
+            })?;
+        }
         Self::view_from_record(stored)
     }
 
@@ -753,6 +883,12 @@ impl AiService {
             strategy_reference: None,
             conclusion: None,
             actions: None,
+            core_drivers: None,
+            market_thesis: None,
+            bull_bear_analysis: None,
+            future_catalysts: None,
+            risk_factors: None,
+            research_score: None,
         };
         validate_sections(&sections)?;
         let report = record
@@ -791,6 +927,8 @@ fn persist_research_evidence(
         ("MARKET", &input.market),
         ("NEWS", &input.news),
         ("EVENT", &input.events),
+        ("INTELLIGENCE", &input.intelligence),
+        ("RESEARCH_CONTEXT", &input.research_context),
     ] {
         database.create_research_evidence(NewResearchEvidence {
             research_run_id,
@@ -804,6 +942,102 @@ fn persist_research_evidence(
         })?;
     }
     Ok(())
+}
+
+fn profile_context(profile: Option<SecurityProfile>) -> Value {
+    match profile {
+        Some(profile) => json!({
+            "status": profile.profile_status,
+            "companyDescription": profile.company_description,
+            "industry": profile.industry,
+            "sector": profile.sector,
+            "conceptTags": serde_json::from_str::<Value>(&profile.tags_json).unwrap_or_else(|_| json!([])),
+            "businessModel": profile.business_model,
+            "historicalCharacteristics": profile.historical_characteristics,
+            "source": profile.source,
+            "sourceUrl": profile.source_url,
+            "fetchedAt": profile.fetched_at,
+            "updatedAt": profile.updated_at,
+        }),
+        None => json!({
+            "status": "PENDING",
+            "companyDescription": null,
+            "industry": null,
+            "sector": null,
+            "conceptTags": [],
+            "businessModel": null,
+            "historicalCharacteristics": null,
+            "source": null,
+            "reason": "正在建立股票画像；暂无可验证股票画像",
+        }),
+    }
+}
+
+fn ids_from_items(value: &Value, prefix: &str) -> Vec<String> {
+    value
+        .pointer("/items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id").and_then(Value::as_i64))
+        .map(|id| format!("{prefix}:{id}"))
+        .collect()
+}
+
+fn ids_from_intelligence(value: &Value, path: &str) -> Vec<String> {
+    value
+        .pointer(path)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id").and_then(Value::as_i64))
+        .map(|id| format!("INTELLIGENCE:{id}"))
+        .collect()
+}
+
+fn build_research_context(
+    database: &DatabaseService,
+    security_id: i64,
+    market: &Value,
+    news: &Value,
+    events: &Value,
+    intelligence: &Value,
+) -> Result<Value, AiServiceError> {
+    let profile = profile_context(database.get_security_profile(security_id)?);
+    let mut allowed = vec!["NO_DATA".to_owned()];
+    if market
+        .pointer("/holding")
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
+        || market
+            .pointer("/indices")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+    {
+        allowed.push("MARKET".to_owned());
+    }
+    allowed.extend(ids_from_items(news, "NEWS"));
+    allowed.extend(ids_from_items(events, "EVENT"));
+    allowed.extend(ids_from_intelligence(intelligence, "/verifiedIntelligence"));
+    allowed.extend(ids_from_intelligence(intelligence, "/rumors"));
+    if profile["status"] == "VERIFIED" && profile["source"].is_string() {
+        allowed.push("PROFILE".to_owned());
+    }
+    allowed.sort();
+    allowed.dedup();
+    Ok(json!({
+        "profile": profile,
+        "allowedEvidenceIds": allowed,
+        "evidencePolicy": {
+            "A_B": "可作为事实",
+            "C": "仅作为行业参考",
+            "D": "仅作为市场情绪或社区观点",
+            "E": "仅作为未证实传闻、风险或观察项"
+        },
+        "analysisRequirements": [
+            "coreDrivers", "marketThesis", "bullBearAnalysis", "futureCatalysts", "riskFactors", "researchScore"
+        ]
+    }))
 }
 
 fn mark_current_provider(configs: &mut [AiProviderConfigView]) {
@@ -864,7 +1098,10 @@ fn deduplicate_events(items: Vec<EventView>) -> Vec<EventView> {
 fn parse_and_validate_provider_sections(value: &str) -> Result<AiReviewSections, AiServiceError> {
     let sections = serde_json::from_str(value)?;
     validate_sections(&sections)?;
-    report_from_sections(&sections)?;
+    let report = report_from_sections(&sections)?;
+    if !report.is_v2() {
+        return Err(AiServiceError::InvalidOutput("AI研究报告缺少 V2 研究维度"));
+    }
     Ok(sections)
 }
 
@@ -878,9 +1115,26 @@ fn report_from_sections(sections: &AiReviewSections) -> Result<AiResearchReport,
         strategy_reference: required_report_field(&sections.strategy_reference)?,
         conclusion: required_report_field(&sections.conclusion)?,
         actions: required_report_field(&sections.actions)?,
+        core_drivers: sections.core_drivers.clone().unwrap_or_default(),
+        market_thesis: sections.market_thesis.clone(),
+        bull_bear_analysis: sections.bull_bear_analysis.clone(),
+        future_catalysts: sections.future_catalysts.clone().unwrap_or_default(),
+        risk_factors: sections.risk_factors.clone().unwrap_or_default(),
+        research_score: sections.research_score.clone(),
     };
     validate_report(&report)?;
     Ok(report)
+}
+
+impl AiResearchReport {
+    fn is_v2(&self) -> bool {
+        !self.core_drivers.is_empty()
+            || self.market_thesis.is_some()
+            || self.bull_bear_analysis.is_some()
+            || !self.future_catalysts.is_empty()
+            || !self.risk_factors.is_empty()
+            || self.research_score.is_some()
+    }
 }
 
 fn required_report_field(value: &Option<String>) -> Result<String, AiServiceError> {
@@ -917,6 +1171,164 @@ fn validate_report(report: &AiResearchReport) -> Result<(), AiServiceError> {
         return Err(AiServiceError::InvalidOutput(
             "AI输出包含禁止的投资建议或预测",
         ));
+    }
+    if report.is_v2() {
+        validate_v2_report(report)?;
+    }
+    Ok(())
+}
+
+fn validate_v2_report(report: &AiResearchReport) -> Result<(), AiServiceError> {
+    let thesis = report
+        .market_thesis
+        .as_ref()
+        .ok_or(AiServiceError::InvalidOutput("AI研究报告缺少市场交易逻辑"))?;
+    let bull_bear = report
+        .bull_bear_analysis
+        .as_ref()
+        .ok_or(AiServiceError::InvalidOutput("AI研究报告缺少多空博弈分析"))?;
+    let score = report
+        .research_score
+        .as_ref()
+        .ok_or(AiServiceError::InvalidOutput("AI研究报告缺少研究评分"))?;
+    if report.core_drivers.is_empty() || report.risk_factors.is_empty() {
+        return Err(AiServiceError::InvalidOutput(
+            "AI研究报告缺少核心驱动或风险因素",
+        ));
+    }
+    for driver in &report.core_drivers {
+        require_text(&driver.title, "核心驱动标题")?;
+        require_text(&driver.rationale, "核心驱动依据")?;
+        if !matches!(driver.impact_level.as_str(), "HIGH" | "MEDIUM" | "LOW") {
+            return Err(AiServiceError::InvalidOutput("核心驱动影响程度无效"));
+        }
+        reject_trade_language(&driver.title)?;
+        reject_trade_language(&driver.rationale)?;
+    }
+    for text in [
+        &thesis.summary,
+        &thesis.facts,
+        &thesis.expectations,
+        &thesis.sentiment,
+        &bull_bear.key_divergence,
+    ] {
+        require_text(text, "市场交易逻辑")?;
+        reject_trade_language(text)?;
+    }
+    for point in bull_bear.bull.iter().chain(&bull_bear.bear) {
+        require_text(&point.view, "多空观点")?;
+        require_text(&point.basis, "多空依据")?;
+        reject_trade_language(&point.view)?;
+        reject_trade_language(&point.basis)?;
+    }
+    let mut previous_rank = 4;
+    for risk in &report.risk_factors {
+        let rank = match risk.level.as_str() {
+            "HIGH" => 3,
+            "MEDIUM" => 2,
+            "LOW" => 1,
+            _ => return Err(AiServiceError::InvalidOutput("风险等级无效")),
+        };
+        if rank > previous_rank {
+            return Err(AiServiceError::InvalidOutput("风险因素未按高、中、低排序"));
+        }
+        previous_rank = rank;
+        require_text(&risk.title, "风险因素")?;
+        require_text(&risk.reason, "风险原因")?;
+        reject_trade_language(&risk.title)?;
+        reject_trade_language(&risk.reason)?;
+    }
+    for catalyst in &report.future_catalysts {
+        if !matches!(catalyst.time_window.as_str(), "1D" | "3D" | "7D") {
+            return Err(AiServiceError::InvalidOutput("未来催化时间窗口无效"));
+        }
+        if !matches!(
+            catalyst.credibility.as_str(),
+            "A" | "B" | "C" | "D" | "E" | "NO_DATA"
+        ) {
+            return Err(AiServiceError::InvalidOutput("未来催化可信度无效"));
+        }
+        for text in [&catalyst.title, &catalyst.source, &catalyst.time] {
+            require_text(text, "未来催化信息")?;
+            reject_trade_language(text)?;
+        }
+    }
+    for score in [
+        score.fundamental_attention,
+        score.technical_state,
+        score.market_heat,
+        score.sentiment_state,
+        score.risk_level,
+        score.overall,
+    ] {
+        if score > 100 {
+            return Err(AiServiceError::InvalidOutput("研究评分必须介于 0 至 100"));
+        }
+    }
+    require_text(&score.explanation, "研究评分说明")?;
+    reject_trade_language(&score.explanation)?;
+    reject_trade_language(&report.actions)?;
+    Ok(())
+}
+
+fn require_text(value: &str, name: &'static str) -> Result<(), AiServiceError> {
+    if value.trim().is_empty() {
+        Err(AiServiceError::InvalidOutput(name))
+    } else {
+        Ok(())
+    }
+}
+
+fn reject_trade_language(value: &str) -> Result<(), AiServiceError> {
+    const DIRECTIVES: &[&str] = &[
+        "买入", "卖出", "加仓", "减仓", "建仓", "清仓", "止盈", "止损",
+    ];
+    if DIRECTIVES.iter().any(|term| value.contains(term)) {
+        Err(AiServiceError::InvalidOutput("AI输出包含直接交易指令"))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_report_against_evidence(
+    report: &AiResearchReport,
+    research_context: &Value,
+) -> Result<(), AiServiceError> {
+    if !report.is_v2() {
+        return Ok(());
+    }
+    let allowed = research_context
+        .get("allowedEvidenceIds")
+        .and_then(Value::as_array)
+        .ok_or(AiServiceError::InvalidOutput("研究上下文缺少证据目录"))?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<HashSet<_>>();
+    let mut references = Vec::new();
+    for item in &report.core_drivers {
+        references.push(&item.evidence_ids);
+    }
+    if let Some(thesis) = &report.market_thesis {
+        references.push(&thesis.evidence_ids);
+    }
+    if let Some(analysis) = &report.bull_bear_analysis {
+        references.push(&analysis.evidence_ids);
+        for item in analysis.bull.iter().chain(&analysis.bear) {
+            references.push(&item.evidence_ids);
+        }
+    }
+    for item in &report.future_catalysts {
+        references.push(&item.evidence_ids);
+    }
+    for item in &report.risk_factors {
+        references.push(&item.evidence_ids);
+    }
+    for ids in references {
+        if ids.is_empty() || ids.iter().any(|id| !allowed.contains(id.as_str())) {
+            return Err(AiServiceError::InvalidOutput(
+                "AI研究结论未引用当前 Evidence Context",
+            ));
+        }
     }
     Ok(())
 }
@@ -1300,6 +1712,12 @@ mod tests {
                 strategy_reference: Some("保留原有关注逻辑，并持续观察数据完整性。".into()),
                 conclusion: Some("当前数据有限，结论仅供后续观察。".into()),
                 actions: Some("继续观察数据完整性与后续变化。".into()),
+                core_drivers: None,
+                market_thesis: None,
+                bull_bear_analysis: None,
+                future_catalysts: None,
+                risk_factors: None,
+                research_score: None,
             })
         }
     }
@@ -1330,6 +1748,9 @@ mod tests {
             assert!(!serialized.contains("dailyPnl"));
             assert!(!serialized.contains("totalPnl"));
             assert_eq!(input.sector["status"], "UNAVAILABLE");
+            assert!(input.research_context["allowedEvidenceIds"]
+                .as_array()
+                .is_some_and(|ids| ids.iter().any(|id| id == "MARKET")));
             Ok(AiReviewSections {
                 facts: vec!["已保存行情快照仅供事实核验。".into()],
                 inferences: vec!["关注标的分析只基于本次已保存数据。".into()],
@@ -1342,6 +1763,56 @@ mod tests {
                 strategy_reference: Some("持续观察行情、板块和消息面的后续变化。".into()),
                 conclusion: Some("当前结论仅基于本次已保存数据。".into()),
                 actions: Some("继续观察行情和后续公告。".into()),
+                core_drivers: Some(vec![ResearchDriver {
+                    title: "已保存市场快照".into(),
+                    rationale: "本次快照包含主要指数。".into(),
+                    impact_level: "MEDIUM".into(),
+                    evidence_ids: vec!["MARKET".into()],
+                }]),
+                market_thesis: Some(MarketThesis {
+                    summary: "当前仅能基于已保存市场快照研究。".into(),
+                    facts: "已保存指数快照可核验。".into(),
+                    expectations: "暂无可验证市场预期数据。".into(),
+                    sentiment: "暂无可验证情绪数据。".into(),
+                    evidence_ids: vec!["MARKET".into()],
+                }),
+                bull_bear_analysis: Some(BullBearAnalysis {
+                    bull: vec![BullBearPoint {
+                        view: "指数快照已保存。".into(),
+                        basis: "本次市场快照。".into(),
+                        evidence_ids: vec!["MARKET".into()],
+                    }],
+                    bear: vec![BullBearPoint {
+                        view: "板块资料未确认。".into(),
+                        basis: "研究上下文。".into(),
+                        evidence_ids: vec!["NO_DATA".into()],
+                    }],
+                    key_divergence: "可验证市场快照与缺失板块资料之间的分歧。".into(),
+                    evidence_ids: vec!["MARKET".into()],
+                }),
+                future_catalysts: Some(vec![FutureCatalyst {
+                    time_window: "1D".into(),
+                    title: "暂无已确认催化事项".into(),
+                    source: "暂无数据".into(),
+                    credibility: "NO_DATA".into(),
+                    time: "暂无数据".into(),
+                    evidence_ids: vec!["NO_DATA".into()],
+                }]),
+                risk_factors: Some(vec![RiskFactor {
+                    level: "HIGH".into(),
+                    title: "板块资料未确认".into(),
+                    reason: "当前没有可靠板块数据源。".into(),
+                    evidence_ids: vec!["NO_DATA".into()],
+                }]),
+                research_score: Some(ResearchScore {
+                    fundamental_attention: 0,
+                    technical_state: 0,
+                    market_heat: 50,
+                    sentiment_state: 0,
+                    risk_level: 80,
+                    overall: 30,
+                    explanation: "评分仅反映本次可验证研究数据的完整度，不构成投资建议。".into(),
+                }),
             })
         }
     }
@@ -1412,6 +1883,14 @@ mod tests {
         assert_eq!(generated[0].security_id, Some(security.id));
         assert_eq!(generated[0].security_symbol.as_deref(), Some("600519"));
         assert_eq!(database.ai_review_context_count().unwrap(), 1);
+        assert_eq!(database.ai_research_report_count().unwrap(), 1);
+        assert_eq!(
+            generated[0]
+                .report
+                .as_ref()
+                .map(|report| report.core_drivers.len()),
+            Some(1)
+        );
         assert_eq!(
             database
                 .get_ai_review(generated[0].id)
@@ -1452,6 +1931,7 @@ mod tests {
                 news_json: "{}".into(),
                 events_json: "{}".into(),
                 intelligence_json: "{}".into(),
+                research_context_json: "{}".into(),
                 research_run_id: None,
             })
             .unwrap();

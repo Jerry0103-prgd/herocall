@@ -84,6 +84,7 @@ pub struct PortfolioHoldingView {
     pub change_percent: Option<String>,
     pub transaction_status: String,
     pub is_watchlist: bool,
+    pub profile_status: Option<String>,
 }
 
 #[derive(Debug)]
@@ -241,9 +242,11 @@ impl PortfolioUiService {
             return Err(PortfolioUiError::ExistingHolding);
         }
 
-        Ok(Self::watchlist_view(
-            database.create_watchlist_item(security.id)?,
-        )?)
+        let watchlist_item = database.create_watchlist_item(security.id)?;
+        // Profile creation is intentionally non-blocking and contains no inferred company data.
+        // A newly followed security is usable even while its profile remains PENDING.
+        database.ensure_security_profile_pending(security.id)?;
+        Ok(Self::watchlist_view(watchlist_item)?)
     }
 
     pub fn update(
@@ -330,6 +333,7 @@ impl PortfolioUiService {
             change_percent: data.change_percent,
             transaction_status: "关注标的".into(),
             is_watchlist: true,
+            profile_status: Some(data.profile_status),
         })
     }
 
@@ -352,6 +356,7 @@ impl PortfolioUiService {
                 change_percent: data.change_percent,
                 transaction_status: "关注标的".into(),
                 is_watchlist: true,
+                profile_status: None,
             });
         }
         let security_type = parse_security_type(&data.security_type)?;
@@ -411,6 +416,7 @@ impl PortfolioUiService {
                 .transaction_status
                 .unwrap_or_else(|| "暂无交易记录".into()),
             is_watchlist: false,
+            profile_status: None,
         })
     }
 }
@@ -612,6 +618,7 @@ mod tests {
         assert_eq!(created.market_value, None);
         assert_eq!(created.daily_pnl, None);
         assert_eq!(created.total_pnl, None);
+        assert_eq!(created.profile_status.as_deref(), Some("PENDING"));
         assert_eq!(
             database
                 .list_market_securities_for_holdings()

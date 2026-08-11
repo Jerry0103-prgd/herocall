@@ -19,6 +19,7 @@ export type PortfolioHolding = {
   changePercent: string | null;
   transactionStatus: string;
   isWatchlist: boolean;
+  profileStatus: "PENDING" | "VERIFIED" | "NO_DATA" | null;
 };
 
 export type CreateHoldingInput = {

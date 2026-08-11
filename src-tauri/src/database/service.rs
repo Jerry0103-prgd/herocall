@@ -224,6 +224,36 @@ pub struct NewAiReviewContext {
     pub news_json: String,
     pub events_json: String,
     pub intelligence_json: String,
+    pub research_context_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecurityProfile {
+    pub security_id: i64,
+    pub profile_status: String,
+    pub company_description: Option<String>,
+    pub industry: Option<String>,
+    pub sector: Option<String>,
+    pub tags_json: String,
+    pub business_model: Option<String>,
+    pub historical_characteristics: Option<String>,
+    pub source: Option<String>,
+    pub source_url: Option<String>,
+    pub fetched_at: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAiResearchReport {
+    pub ai_review_id: i64,
+    pub security_id: i64,
+    pub core_drivers_json: String,
+    pub market_thesis_json: String,
+    pub bull_bear_analysis_json: String,
+    pub future_catalysts_json: String,
+    pub risk_factors_json: String,
+    pub research_score_json: String,
+    pub research_context_json: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -405,6 +435,7 @@ pub struct WatchlistItemData {
     pub created_at: String,
     pub current_price: Option<String>,
     pub change_percent: Option<String>,
+    pub profile_status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1021,19 +1052,73 @@ impl DatabaseService {
     pub fn create_ai_review_context(&self, input: NewAiReviewContext) -> DatabaseResult<i64> {
         self.connection.execute(
             "INSERT INTO ai_review_contexts (
-                review_id, manual_refresh_run_id, research_run_id, portfolio_json, market_json, news_json, events_json, intelligence_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                review_id, manual_refresh_run_id, research_run_id, portfolio_json, market_json, news_json, events_json, intelligence_json, research_context_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![input.review_id, input.manual_refresh_run_id, input.research_run_id,
                 input.portfolio_json, input.market_json, input.news_json, input.events_json,
-                input.intelligence_json],
+                input.intelligence_json, input.research_context_json],
         )?;
         Ok(self.connection.last_insert_rowid())
+    }
+
+    /// Creates an explicit pending profile without inferring company facts. A future verified
+    /// profile source may enrich it, but a manually followed code is always safe to retain.
+    pub fn ensure_security_profile_pending(&self, security_id: i64) -> DatabaseResult<()> {
+        self.connection.execute(
+            "INSERT OR IGNORE INTO security_profiles (security_id, profile_status) VALUES (?1, 'PENDING')",
+            [security_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_security_profile(
+        &self,
+        security_id: i64,
+    ) -> DatabaseResult<Option<SecurityProfile>> {
+        self.connection.query_row(
+            "SELECT security_id, profile_status, company_description, industry, sector, tags_json,
+                    business_model, historical_characteristics, source, source_url, fetched_at, updated_at
+             FROM security_profiles WHERE security_id=?1",
+            [security_id],
+            Self::map_security_profile,
+        ).optional().map_err(Into::into)
+    }
+
+    pub fn create_ai_research_report(&self, input: NewAiResearchReport) -> DatabaseResult<()> {
+        self.connection.execute(
+            "INSERT INTO ai_research_reports (
+                ai_review_id, security_id, core_drivers_json, market_thesis_json,
+                bull_bear_analysis_json, future_catalysts_json, risk_factors_json,
+                research_score_json, research_context_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                input.ai_review_id,
+                input.security_id,
+                input.core_drivers_json,
+                input.market_thesis_json,
+                input.bull_bear_analysis_json,
+                input.future_catalysts_json,
+                input.risk_factors_json,
+                input.research_score_json,
+                input.research_context_json,
+            ],
+        )?;
+        Ok(())
     }
 
     #[cfg(test)]
     pub fn ai_review_context_count(&self) -> DatabaseResult<i64> {
         self.connection
             .query_row("SELECT COUNT(*) FROM ai_review_contexts", [], |row| {
+                row.get(0)
+            })
+            .map_err(Into::into)
+    }
+
+    #[cfg(test)]
+    pub fn ai_research_report_count(&self) -> DatabaseResult<i64> {
+        self.connection
+            .query_row("SELECT COUNT(*) FROM ai_research_reports", [], |row| {
                 row.get(0)
             })
             .map_err(Into::into)
@@ -1509,7 +1594,8 @@ impl DatabaseService {
             "
             SELECT w.id, s.id, s.name, s.symbol, s.market, s.security_type, w.created_at,
                    (SELECT mq.current_price FROM market_quotes mq WHERE mq.security_id = s.id ORDER BY mq.fetched_at DESC, mq.id DESC LIMIT 1),
-                   (SELECT mq.change_pct FROM market_quotes mq WHERE mq.security_id = s.id ORDER BY mq.fetched_at DESC, mq.id DESC LIMIT 1)
+                   (SELECT mq.change_pct FROM market_quotes mq WHERE mq.security_id = s.id ORDER BY mq.fetched_at DESC, mq.id DESC LIMIT 1),
+                   COALESCE((SELECT profile_status FROM security_profiles sp WHERE sp.security_id = s.id), 'PENDING')
             FROM watchlist_items w
             JOIN securities s ON s.id = w.security_id
             ORDER BY w.created_at DESC, w.id DESC
@@ -1526,6 +1612,7 @@ impl DatabaseService {
                 created_at: row.get(6)?,
                 current_price: row.get(7)?,
                 change_percent: row.get(8)?,
+                profile_status: row.get(9)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -1554,7 +1641,8 @@ impl DatabaseService {
         self.connection
             .query_row(
                 "
-                SELECT w.id, s.id, s.name, s.symbol, s.market, s.security_type, w.created_at
+                SELECT w.id, s.id, s.name, s.symbol, s.market, s.security_type, w.created_at,
+                       COALESCE((SELECT profile_status FROM security_profiles sp WHERE sp.security_id = s.id), 'PENDING')
                 FROM watchlist_items w JOIN securities s ON s.id = w.security_id
                 WHERE w.security_id = ?1
                 ",
@@ -1570,6 +1658,7 @@ impl DatabaseService {
                         created_at: row.get(6)?,
                         current_price: None,
                         change_percent: None,
+                        profile_status: row.get(7)?,
                     })
                 },
             )
@@ -1803,7 +1892,8 @@ impl DatabaseService {
         self.connection
             .query_row(
                 "
-                SELECT w.id, s.id, s.name, s.symbol, s.market, s.security_type, w.created_at
+                SELECT w.id, s.id, s.name, s.symbol, s.market, s.security_type, w.created_at,
+                       COALESCE((SELECT profile_status FROM security_profiles sp WHERE sp.security_id = s.id), 'PENDING')
                 FROM watchlist_items w JOIN securities s ON s.id = w.security_id
                 WHERE w.id = ?1
                 ",
@@ -1819,6 +1909,7 @@ impl DatabaseService {
                         created_at: row.get(6)?,
                         current_price: None,
                         change_percent: None,
+                        profile_status: row.get(7)?,
                     })
                 },
             )
@@ -2514,6 +2605,23 @@ impl DatabaseService {
         })
     }
 
+    fn map_security_profile(row: &Row<'_>) -> rusqlite::Result<SecurityProfile> {
+        Ok(SecurityProfile {
+            security_id: row.get(0)?,
+            profile_status: row.get(1)?,
+            company_description: row.get(2)?,
+            industry: row.get(3)?,
+            sector: row.get(4)?,
+            tags_json: row.get(5)?,
+            business_model: row.get(6)?,
+            historical_characteristics: row.get(7)?,
+            source: row.get(8)?,
+            source_url: row.get(9)?,
+            fetched_at: row.get(10)?,
+            updated_at: row.get(11)?,
+        })
+    }
+
     fn list_intelligence_by_scope(
         &self,
         scope: &str,
@@ -2947,15 +3055,16 @@ mod tests {
                     'manual_refresh_events', 'watchlist_items', 'ai_provider_settings',
                     'news_security_links', 'event_security_links', 'research_runs',
                     'security_price_history', 'research_evidence', 'intelligence_items',
-                    'intelligence_security_relations', 'manual_refresh_intelligence_items'
+                    'intelligence_security_relations', 'manual_refresh_intelligence_items',
+                    'security_profiles', 'ai_research_reports'
                 )",
                 [],
                 |row| row.get(0),
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 22);
-        assert_eq!(table_count, 27);
+        assert_eq!(migration_count, 23);
+        assert_eq!(table_count, 29);
     }
 
     #[test]
@@ -3247,6 +3356,7 @@ mod tests {
                 news_json: "[]".into(),
                 events_json: "[]".into(),
                 intelligence_json: "{}".into(),
+                research_context_json: "{}".into(),
                 research_run_id: None,
             })
             .expect("create ai context");
@@ -3265,6 +3375,12 @@ mod tests {
                 research_run_id: None,
             })
             .expect("create owned ai review");
+        database
+            .ensure_security_profile_pending(security_a.id)
+            .expect("create owned security profile");
+        database
+            .ensure_security_profile_pending(security_b.id)
+            .expect("create unrelated security profile");
 
         database
             .remove_followed_security_completely(follow_a.watchlist_item_id, security_a.id)
@@ -3274,7 +3390,7 @@ mod tests {
             .find_security_by_symbol("300209")
             .expect("find removed security")
             .is_none());
-        let owned_counts: (i64, i64, i64, i64, i64, i64, i64, i64) = database
+        let owned_counts: (i64, i64, i64, i64, i64, i64, i64, i64, i64) = database
             .connection
             .query_row(
                 "SELECT
@@ -3285,7 +3401,8 @@ mod tests {
                 (SELECT COUNT(*) FROM news_articles WHERE id = ?3),
                 (SELECT COUNT(*) FROM events WHERE id = ?4),
                 (SELECT COUNT(*) FROM ai_reviews WHERE security_id = ?1),
-                (SELECT COUNT(*) FROM ai_review_contexts WHERE id = ?5)",
+                (SELECT COUNT(*) FROM ai_review_contexts WHERE id = ?5),
+                (SELECT COUNT(*) FROM security_profiles WHERE security_id = ?1)",
                 params![
                     security_a.id,
                     snapshot_id,
@@ -3303,12 +3420,13 @@ mod tests {
                         row.get(5)?,
                         row.get(6)?,
                         row.get(7)?,
+                        row.get(8)?,
                     ))
                 },
             )
             .expect("verify owned records removed");
-        assert_eq!(owned_counts, (0, 0, 0, 1, 0, 0, 0, 0));
-        let shared_state: (i64, i64, i64, i64, i64, i64) = database
+        assert_eq!(owned_counts, (0, 0, 0, 1, 0, 0, 0, 0, 0));
+        let shared_state: (i64, i64, i64, i64, i64, i64, i64) = database
             .connection
             .query_row(
                 "SELECT
@@ -3317,12 +3435,13 @@ mod tests {
                 (SELECT COUNT(*) FROM events WHERE id = ?2),
                 (SELECT security_id FROM events WHERE id = ?2),
                 (SELECT COUNT(*) FROM intelligence_items WHERE id = ?3),
-                (SELECT COUNT(*) FROM intelligence_security_relations WHERE intelligence_item_id = ?3 AND security_id = ?4)",
+                (SELECT COUNT(*) FROM intelligence_security_relations WHERE intelligence_item_id = ?3 AND security_id = ?4),
+                (SELECT COUNT(*) FROM security_profiles WHERE security_id = ?4)",
                 params![shared_news.id, shared_event.id, shared_intelligence.id, security_b.id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
             )
             .expect("verify shared records remain");
-        assert_eq!(shared_state, (1, security_b.id, 1, security_b.id, 1, 1));
+        assert_eq!(shared_state, (1, security_b.id, 1, security_b.id, 1, 1, 1));
     }
 
     #[test]
@@ -3502,7 +3621,7 @@ mod tests {
             })
             .expect("verify provider settings migration");
 
-        assert_eq!(migration_count, 22);
+        assert_eq!(migration_count, 23);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -3604,6 +3723,65 @@ mod tests {
     }
 
     #[test]
+    fn migration_023_creates_pending_profiles_and_preserves_legacy_context() {
+        let mut connection = Connection::open_in_memory().expect("create pre-023 database");
+        migrations::apply_022_for_upgrade_test(&mut connection).expect("apply through 022");
+        connection.execute(
+            "INSERT INTO securities (symbol, name, market, instrument_type, concepts_json, trading_rule, exchange, security_type, trade_rule)
+             VALUES ('300209', '测试科技', 'SZSE', 'STOCK', '[]', 'UNKNOWN', 'SZSE', 'STOCK', 'UNKNOWN')",
+            [],
+        ).expect("insert legacy security");
+        let security_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                "INSERT INTO watchlist_items (security_id) VALUES (?1)",
+                [security_id],
+            )
+            .expect("insert legacy follow");
+        connection.execute(
+            "INSERT INTO daily_reviews (review_date, portfolio_summary, market_summary, holding_summary, risk_summary)
+             VALUES ('2026-08-11', '{}', '{}', '{}', '{}')",
+            [],
+        ).expect("insert review");
+        let review_id = connection.last_insert_rowid();
+        connection.execute(
+            "INSERT INTO manual_refresh_runs (started_at, completed_at, portfolio_json, news_status, events_status, status)
+             VALUES ('2026-08-11T08:00:00Z', '2026-08-11T08:01:00Z', '[]', 'NO_DATA', 'NO_DATA', 'NO_DATA')",
+            [],
+        ).expect("insert refresh run");
+        let run_id = connection.last_insert_rowid();
+        connection.execute(
+            "INSERT INTO ai_review_contexts (review_id, manual_refresh_run_id, portfolio_json, market_json, news_json, events_json, intelligence_json)
+             VALUES (?1, ?2, '[]', '{}', '{}', '{}', '{}')",
+            params![review_id, run_id],
+        ).expect("insert legacy intelligence context");
+        let context_id = connection.last_insert_rowid();
+
+        migrations::apply(&mut connection).expect("upgrade through 023");
+        migrations::apply(&mut connection).expect("reapply through 023");
+        let profile: (String, String) = connection
+            .query_row(
+                "SELECT profile_status, tags_json FROM security_profiles WHERE security_id=?1",
+                [security_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read pending profile");
+        let research_table: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ai_research_reports'", [], |row| row.get(0),
+        ).expect("research reports table exists");
+        let preserved_context: String = connection
+            .query_row(
+                "SELECT research_context_json FROM ai_review_contexts WHERE id=?1",
+                [context_id],
+                |row| row.get(0),
+            )
+            .expect("legacy context remains readable");
+        assert_eq!(profile, ("PENDING".into(), "[]".into()));
+        assert_eq!(research_table, 1);
+        assert_eq!(preserved_context, "{}".to_owned());
+    }
+
+    #[test]
     fn migration_011_backfills_index_change_percent_without_losing_quotes() {
         let mut connection = Connection::open_in_memory().expect("create pre-011 database");
         migrations::apply_010_for_upgrade_test(&mut connection).expect("apply through 010");
@@ -3649,7 +3827,7 @@ mod tests {
             })
             .expect("read migration count");
         assert_eq!(quote, ("000001.SH".into(), "1.25".into(), "1.25".into()));
-        assert_eq!(migration_count, 22);
+        assert_eq!(migration_count, 23);
 
         let database = DatabaseService { connection };
         let records = database
@@ -3776,7 +3954,7 @@ mod tests {
                 row.get(0)
             })
             .expect("read migration count");
-        assert_eq!(migration_count, 22);
+        assert_eq!(migration_count, 23);
     }
 
     #[test]
@@ -3847,7 +4025,7 @@ mod tests {
                 row.get(0)
             })
             .expect("read migration count");
-        assert_eq!(migration_count, 22);
+        assert_eq!(migration_count, 23);
     }
 
     #[test]
