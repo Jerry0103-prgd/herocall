@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use crate::{
     database::service::{
         AiReview, DatabaseError, DatabaseService, NewAiResearchReport, NewAiReview,
-        NewAiReviewContext, NewResearchEvidence, SecurityProfile,
+        NewAiReviewContext, NewAiReviewFailure, NewResearchEvidence, SecurityProfile,
     },
     event_service::{EventService, EventServiceError, EventView},
     intelligence_service::{IntelligenceService, IntelligenceServiceError},
@@ -260,18 +260,28 @@ pub trait AiProviderAdapter {
 pub struct AiProviderError {
     message: String,
     http_status: Option<u16>,
+    raw_response: Option<String>,
 }
 impl AiProviderError {
     fn unavailable() -> Self {
         Self {
             message: "AI Provider 网络请求失败".into(),
             http_status: None,
+            raw_response: None,
         }
     }
     fn invalid_response(reason: impl fmt::Display) -> Self {
         Self {
             message: format!("AI Provider 返回格式错误：{reason}"),
             http_status: None,
+            raw_response: None,
+        }
+    }
+    fn invalid_response_with_raw(reason: impl fmt::Display, raw_response: String) -> Self {
+        Self {
+            message: format!("AI Provider 返回格式错误：{reason}"),
+            http_status: None,
+            raw_response: Some(raw_response),
         }
     }
     fn http_error(status: u16, body: &str) -> Self {
@@ -284,6 +294,7 @@ impl AiProviderError {
         Self {
             message: format!("{category}（HTTP {status}）{}", detail.unwrap_or_default()),
             http_status: Some(status),
+            raw_response: None,
         }
     }
 }
@@ -338,21 +349,24 @@ impl AiProviderAdapter for OpenAiCompatibleProviderAdapter {
                     "ai_provider_response_invalid provider={} model={} security_id={} error_message=缺少 choices[0].message.content raw_response={raw_response}",
                     self.provider, self.model, input.security_id
                 ));
-                AiProviderError::invalid_response("缺少 choices[0].message.content")
+                AiProviderError::invalid_response_with_raw(
+                    "缺少 choices[0].message.content",
+                    raw_response,
+                )
             })?;
-        parse_and_validate_provider_sections(content).map_err(|error| {
+        parse_and_normalize_provider_sections(content).map_err(|error| {
             let raw_response = sanitize_diagnostic_response(content, &self.api_key);
             ai_diagnostic(format!(
                 "ai_provider_response_invalid provider={} model={} security_id={} error_message={} raw_response={raw_response}",
                 self.provider, self.model, input.security_id, error
             ));
-            AiProviderError::invalid_response(error)
+            AiProviderError::invalid_response_with_raw(error, raw_response)
         })
     }
 }
 
 fn research_report_system_prompt() -> &'static str {
-    "你是个人股票研究与复盘助手。仅依据输入 JSON 的 Evidence Context 输出严格 JSON 对象。必须包含既有审计字段 facts:[string]、inferences:[string]、risks:[string]、stock_status:string、market_analysis:string、sector_analysis:string、news_analysis:string、technical_analysis:string、strategy_reference:string、conclusion:string、actions:string，以及 Research Report V2 字段：coreDrivers:[{title,rationale,impactLevel,evidenceIds}]、marketThesis:{summary,facts,expectations,sentiment,evidenceIds}、bullBearAnalysis:{bull:[{view,basis,evidenceIds}],bear:[{view,basis,evidenceIds}],keyDivergence,evidenceIds}、futureCatalysts:[{timeWindow,title,source,credibility,time,evidenceIds}]、riskFactors:[{level,title,reason,evidenceIds}]、researchScore:{fundamentalAttention,technicalState,marketHeat,sentimentState,riskLevel,overall,explanation}。每一个 V2 分析条目必须列出 evidenceIds：只能使用输入 researchContext.allowedEvidenceIds 中的 ID；资料不足时使用 NO_DATA，并写“暂无数据”或“未确认”。今日核心驱动必须解释当日涨跌/波动的已知驱动与当前交易逻辑，而非罗列新闻；impactLevel 仅能为 HIGH、MEDIUM、LOW。marketThesis 必须明确分开 facts（事实）、expectations（市场预期）、sentiment（情绪驱动）。bullBearAnalysis 只分析市场多空观点与最大分歧，严禁给出交易指令。futureCatalysts 仅列输入事件或情报支持的 1D/3D/7D 催化，每项必须带来源、可信度、时间。riskFactors 必须按 HIGH、MEDIUM、LOW 顺序，并说明原因。researchScore 的六项值只能为 0-100，是当前研究状态评分，非涨跌预测、非投资建议，explanation 必须说明依据和局限。FACTS 只能陈述带 source、时间或 evidence 的输入事实；INFERENCES 必须说明基于哪些事实推断；RISKS 只列不确定性、数据缺失或需核验事项。技术面只能基于 technical 字段；profile.status 非 VERIFIED 或资料缺失时，必须写“暂无可验证股票画像”，不得猜测公司、行业、板块或概念。intelligence.verifiedIntelligence 中仅 A/B 级信息可作为事实；C 级仅可作为行业参考；communityOpinion 只能称为社区观点或情绪线索，rumors 只能作为未证实传闻、风险或观察项，绝不可作为 FACTS。不得提及持仓成本、盈亏、是否实际持仓或账户资产。不得输出买入、卖出、加仓、减仓、建仓、清仓、止盈、止损、目标价、收益预测、收益承诺、保证收益、必涨、必跌、稳赚或任何未来确定性/交易建议；actions 只能写“本报告不提供交易建议，建议持续观察的证据条件：…”。数据缺失时明确“暂无数据”或“未确认”，绝不补造事实。"
+    "你是个人股票研究与复盘助手。仅依据输入 JSON 的 Evidence Context 输出严格 JSON 对象。必须包含既有审计字段 facts:[string]、inferences:[string]、risks:[string]、stock_status:string、market_analysis:string、sector_analysis:string、news_analysis:string、technical_analysis:string、strategy_reference:string、conclusion:string、actions:string，以及 Research Report V2 字段：coreDrivers:[{title,rationale,impactLevel,evidenceIds}]、marketThesis:{summary,facts,expectations,sentiment,evidenceIds}、bullBearAnalysis:{bull:[{view,basis,evidenceIds}],bear:[{view,basis,evidenceIds}],keyDivergence,evidenceIds}、futureCatalysts:[{timeWindow,title,source,credibility,time,evidenceIds}]、riskFactors:[{level,title,reason,evidenceIds}]、researchScore:{fundamentalAttention,technicalState,marketHeat,sentimentState,riskLevel,overall,explanation}。每一个 V2 分析条目必须列出 evidenceIds：只能使用输入 researchContext.allowedEvidenceIds 中的 ID；资料不足时使用 NO_DATA，并写“暂无数据”或“未确认”。今日核心驱动必须解释当日涨跌/波动的已知驱动与当前交易逻辑，而非罗列新闻；impactLevel 仅能为 HIGH、MEDIUM、LOW。marketThesis 必须明确分开 facts（事实）、expectations（市场预期）、sentiment（情绪驱动）。bullBearAnalysis 只分析市场多空观点与最大分歧，严禁给出交易指令。futureCatalysts 仅列输入事件或情报支持的 1D/3D/7D 催化，每项必须带来源、可信度、时间。riskFactors 必须按 HIGH、MEDIUM、LOW 顺序，并说明原因。researchScore 的六项值只能为 0-100，是当前研究状态评分，非涨跌预测、非投资建议，explanation 必须说明依据和局限。FACTS 只能陈述带 source、时间或 evidence 的输入事实；INFERENCES 必须说明基于哪些事实推断；RISKS 只列不确定性、数据缺失或需核验事项。技术面只能基于 technical 字段；profile.status 非 VERIFIED 或资料缺失时，必须写“暂无可验证股票画像”，不得猜测公司、行业、板块或概念。intelligence.verifiedIntelligence 中仅 A/B 级信息可作为事实；C 级仅可作为行业参考；communityOpinion 只能称为社区观点或情绪线索，rumors 只能作为未证实传闻、风险或观察项，绝不可作为 FACTS。不得提及持仓成本、盈亏、是否实际持仓或账户资产。不得输出买入、卖出、加仓、减仓、建仓、清仓、止盈、止损、目标价、收益预测、收益承诺、保证收益、必涨、必跌、稳赚或任何未来确定性/交易建议；actions 只能写“本报告不提供交易建议，建议持续观察的证据条件：…”。输出只能是 JSON 对象，禁止 Markdown、代码块、前后缀说明或额外解释文本；至少固定包含 {\"facts\":[],\"inferences\":[],\"risks\":[],\"strategy_reference\":\"\"}。数据缺失时明确“暂无数据”或“未确认”，绝不补造事实。"
 }
 
 fn provider_display_name(provider: &str) -> &'static str {
@@ -822,6 +836,24 @@ impl AiService {
             input.events["items"].as_array().map_or(0, Vec::len),
         ));
         let sections = provider.generate(input).map_err(|error| {
+            if let Some(raw_response) = error.raw_response.as_deref() {
+                // A parse failure is auditable, but never becomes an `ai_reviews` success row.
+                // The response has already been redacted and bounded by the adapter.
+                if let Err(store_error) = database.create_ai_review_failure(NewAiReviewFailure {
+                    provider: provider.provider().into(),
+                    model: provider.model().into(),
+                    security_id: input.security_id,
+                    raw_response: raw_response.into(),
+                    error_message: error.to_string(),
+                }) {
+                    ai_diagnostic(format!(
+                        "ai_review_failure_store_failed provider={} model={} security_id={} error_message={store_error}",
+                        provider.provider(),
+                        provider.model(),
+                        input.security_id,
+                    ));
+                }
+            }
             ai_diagnostic(format!(
                 "ai_generation_failed provider={} model={} security_id={} error_message={}",
                 provider.provider(),
@@ -1129,14 +1161,115 @@ fn deduplicate_events(items: Vec<EventView>) -> Vec<EventView> {
         .collect()
 }
 
-fn parse_and_validate_provider_sections(value: &str) -> Result<AiReviewSections, AiServiceError> {
-    let sections = serde_json::from_str(value)?;
-    validate_sections(&sections)?;
-    let report = report_from_sections(&sections)?;
-    if !report.is_v2() {
-        return Err(AiServiceError::InvalidOutput("AI研究报告缺少 V2 研究维度"));
+fn parse_and_normalize_provider_sections(value: &str) -> Result<AiReviewSections, AiServiceError> {
+    let payload: Value = serde_json::from_str(value)
+        .map_err(|_| AiServiceError::InvalidOutput("AI_REVIEW_PARSE_FAILED"))?;
+
+    // First preserve the fully structured V2 response without alteration.
+    if let Ok(sections) = serde_json::from_value::<AiReviewSections>(payload.clone()) {
+        if validate_sections(&sections).is_ok() && report_from_sections(&sections).is_ok() {
+            return Ok(sections);
+        }
     }
+
+    // Some OpenAI-compatible models return Chinese display labels or a short summary schema.
+    // Convert only explicit fields; missing information remains "暂无数据" rather than invented.
+    let sections = normalize_ai_response(&payload)?;
+    validate_sections(&sections)?;
+    report_from_sections(&sections)?;
     Ok(sections)
+}
+
+fn normalize_ai_response(payload: &Value) -> Result<AiReviewSections, AiServiceError> {
+    let object = payload
+        .as_object()
+        .ok_or(AiServiceError::InvalidOutput("AI_REVIEW_PARSE_FAILED"))?;
+    let text = |keys: &[&str]| {
+        keys.iter()
+            .filter_map(|key| object.get(*key))
+            .flat_map(response_texts)
+            .collect::<Vec<_>>()
+    };
+    let first = |keys: &[&str]| text(keys).into_iter().next();
+    let facts = text(&[
+        "facts",
+        "当前个股情况",
+        "stock_status",
+        "current_stock_status",
+        "市场环境分析",
+        "market_analysis",
+        "消息面分析",
+        "news_analysis",
+        "analysis",
+        "分析",
+    ]);
+    if facts.is_empty() {
+        return Err(AiServiceError::InvalidOutput("AI_REVIEW_PARSE_FAILED"));
+    }
+    let inferences = nonempty_or_no_data(text(&[
+        "inferences",
+        "技术面分析",
+        "technical_analysis",
+        "analysis",
+        "分析",
+    ]));
+    let risks = nonempty_or_no_data(text(&[
+        "risks",
+        "风险提示",
+        "风险因素",
+        "risk_factors",
+        "risk_analysis",
+    ]));
+    let stock_status = first(&["当前个股情况", "stock_status", "current_stock_status"])
+        .unwrap_or_else(|| facts.join("；"));
+    let market_analysis =
+        first(&["市场环境分析", "market_analysis"]).unwrap_or_else(|| "暂无数据".into());
+    let news_analysis =
+        first(&["消息面分析", "news_analysis"]).unwrap_or_else(|| "暂无数据".into());
+    let technical_analysis =
+        first(&["技术面分析", "technical_analysis"]).unwrap_or_else(|| "暂无数据".into());
+    let strategy_reference = first(&["策略参考", "strategy_reference", "strategy"])
+        .unwrap_or_else(|| "本报告不提供交易建议，建议持续观察的证据条件：暂无数据。".into());
+    let conclusion = first(&["结论", "conclusion", "summary", "总结"])
+        .or_else(|| first(&["analysis", "分析"]))
+        .unwrap_or_else(|| "暂无数据".into());
+    Ok(AiReviewSections {
+        facts,
+        inferences,
+        risks,
+        stock_status: Some(stock_status),
+        market_analysis: Some(market_analysis),
+        sector_analysis: Some(
+            first(&["所属板块分析", "sector_analysis"]).unwrap_or_else(|| "暂无数据".into()),
+        ),
+        news_analysis: Some(news_analysis),
+        technical_analysis: Some(technical_analysis),
+        strategy_reference: Some(strategy_reference),
+        conclusion: Some(conclusion),
+        actions: Some("本报告不提供交易建议，建议持续观察的证据条件：暂无数据。".into()),
+        core_drivers: None,
+        market_thesis: None,
+        bull_bear_analysis: None,
+        future_catalysts: None,
+        risk_factors: None,
+        research_score: None,
+    })
+}
+
+fn response_texts(value: &Value) -> Vec<String> {
+    match value {
+        Value::String(value) if !value.trim().is_empty() => vec![value.trim().to_owned()],
+        Value::Array(values) => values.iter().flat_map(response_texts).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn nonempty_or_no_data(values: Vec<String>) -> Vec<String> {
+    if values.is_empty() {
+        vec!["暂无数据".into()]
+    } else {
+        values
+    }
 }
 
 fn report_from_sections(sections: &AiReviewSections) -> Result<AiResearchReport, AiServiceError> {
@@ -1531,11 +1664,12 @@ fn curl_ai_request(url: &str, api_key: &str, body: &Value) -> Result<Value, AiPr
         }
         ai_diagnostic(format!("ai_provider_http_status={status}"));
         serde_json::from_slice(&response_body).map_err(|error| {
+            let raw_response = sanitize_api_error_body(&response_body, api_key);
             ai_diagnostic(format!(
                 "json_parse_failed=true reason={error} raw_response={}",
-                sanitize_api_error_body(&response_body, api_key)
+                raw_response
             ));
-            AiProviderError::invalid_response(error)
+            AiProviderError::invalid_response_with_raw(error, raw_response)
         })
     })();
     let _ = fs::remove_file(body_path);
@@ -1985,12 +2119,53 @@ mod tests {
     }
     #[test]
     fn invalid_json_and_prohibited_content_are_rejected() {
-        assert!(parse_and_validate_provider_sections(r#"{"facts":[]}"#).is_err());
+        assert!(parse_and_normalize_provider_sections(r#"{"facts":[]}"#).is_err());
         assert!(matches!(
-            parse_and_validate_provider_sections(
+            parse_and_normalize_provider_sections(
                 r#"{"facts":["行情暂无数据"],"inferences":["目标价为100元"],"risks":["需要核验来源"]}"#
             ),
             Err(AiServiceError::InvalidOutput(_))
+        ));
+    }
+
+    #[test]
+    fn response_normalizer_maps_explicit_chinese_fields_without_inventing_data() {
+        let normalized = parse_and_normalize_provider_sections(
+            r#"{
+              "当前个股情况":"个股行情来自已保存快照",
+              "市场环境分析":"市场指数本次快照已保存",
+              "消息面分析":"暂无关联公告",
+              "技术面分析":["短期走势暂无完整数据"],
+              "风险提示":"需要核验后续数据",
+              "策略参考":"本报告不提供交易建议，建议观察公告",
+              "summary":"仅基于本次保存数据"
+            }"#,
+        )
+        .expect("normalize compatible response");
+        assert_eq!(normalized.facts.len(), 3);
+        assert_eq!(normalized.inferences, vec!["短期走势暂无完整数据"]);
+        assert_eq!(normalized.risks, vec!["需要核验后续数据"]);
+        assert_eq!(
+            normalized.strategy_reference.as_deref(),
+            Some("本报告不提供交易建议，建议观察公告")
+        );
+    }
+
+    #[test]
+    fn response_normalizer_accepts_summary_style_provider_payload() {
+        let normalized = parse_and_normalize_provider_sections(
+            r#"{"analysis":"市场分析仅以本次快照为准","summary":"继续关注后续公告"}"#,
+        )
+        .expect("normalize summary style response");
+        assert_eq!(normalized.facts, vec!["市场分析仅以本次快照为准"]);
+        assert_eq!(normalized.conclusion.as_deref(), Some("继续关注后续公告"));
+    }
+
+    #[test]
+    fn response_normalizer_rejects_unmappable_payloads() {
+        assert!(matches!(
+            parse_and_normalize_provider_sections(r#"["unexpected", "array"]"#),
+            Err(AiServiceError::InvalidOutput("AI_REVIEW_PARSE_FAILED"))
         ));
     }
 

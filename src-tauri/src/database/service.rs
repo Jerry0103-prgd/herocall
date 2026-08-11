@@ -414,6 +414,15 @@ pub struct NewAiReview {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAiReviewFailure {
+    pub provider: String,
+    pub model: String,
+    pub security_id: i64,
+    pub raw_response: String,
+    pub error_message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AiProviderSetting {
     pub provider: String,
     pub endpoint: String,
@@ -895,6 +904,23 @@ impl DatabaseService {
             ],
         )?;
         self.get_ai_review(self.connection.last_insert_rowid())
+    }
+
+    /// Records a non-displayable provider parsing failure. This deliberately uses a separate
+    /// table so an invalid response can never be mistaken for a successful AI review.
+    pub fn create_ai_review_failure(&self, input: NewAiReviewFailure) -> DatabaseResult<()> {
+        self.connection.execute(
+            "INSERT INTO ai_review_failures (provider, model, security_id, error_code, raw_response, error_message)
+             VALUES (?1, ?2, ?3, 'AI_REVIEW_PARSE_FAILED', ?4, ?5)",
+            params![
+                input.provider,
+                input.model,
+                input.security_id,
+                input.raw_response,
+                input.error_message,
+            ],
+        )?;
+        Ok(())
     }
 
     pub fn create_manual_refresh_run(
@@ -1758,6 +1784,10 @@ impl DatabaseService {
         )?;
         transaction.execute(
             "DELETE FROM ai_reviews WHERE security_id = ?1",
+            [security_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM ai_review_failures WHERE security_id = ?1",
             [security_id],
         )?;
 
@@ -3068,15 +3098,15 @@ mod tests {
                     'news_security_links', 'event_security_links', 'research_runs',
                     'security_price_history', 'research_evidence', 'intelligence_items',
                     'intelligence_security_relations', 'manual_refresh_intelligence_items',
-                    'security_profiles', 'ai_research_reports'
+                    'security_profiles', 'ai_research_reports', 'ai_review_failures'
                 )",
                 [],
                 |row| row.get(0),
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 24);
-        assert_eq!(table_count, 29);
+        assert_eq!(migration_count, 25);
+        assert_eq!(table_count, 30);
     }
 
     #[test]
@@ -3238,6 +3268,26 @@ mod tests {
         assert_eq!(after_failure.len(), 1);
         assert_eq!(after_failure[0].id, second.id);
         assert_ne!(after_failure[0].id, first.id);
+
+        database
+            .create_ai_review_failure(NewAiReviewFailure {
+                provider: "TEST".into(),
+                model: "test-model".into(),
+                security_id: security.id,
+                raw_response: "{\"unexpected\":true}".into(),
+                error_message: "AI Provider 返回格式错误：AI_REVIEW_PARSE_FAILED".into(),
+            })
+            .expect("persist parse failure separately");
+        let stored_failure: (String, String, String) = database
+            .connection
+            .query_row(
+                "SELECT error_code, raw_response, error_message FROM ai_review_failures WHERE security_id=?1",
+                [security.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read failure audit row");
+        assert_eq!(stored_failure.0, "AI_REVIEW_PARSE_FAILED");
+        assert_eq!(stored_failure.1, "{\"unexpected\":true}");
     }
 
     #[test]
@@ -3717,7 +3767,7 @@ mod tests {
             })
             .expect("verify provider settings migration");
 
-        assert_eq!(migration_count, 24);
+        assert_eq!(migration_count, 25);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -3909,7 +3959,39 @@ mod tests {
                 row.get(0)
             })
             .expect("count migrations");
-        assert_eq!(migration_count, 24);
+        assert_eq!(migration_count, 25);
+    }
+
+    #[test]
+    fn migration_025_adds_parse_failure_audit_without_changing_ai_reviews() {
+        let mut connection = Connection::open_in_memory().expect("create pre-025 database");
+        migrations::apply_024_for_upgrade_test(&mut connection).expect("apply through 024");
+        connection.execute(
+            "INSERT INTO daily_reviews (review_date, portfolio_summary, market_summary, holding_summary, risk_summary)
+             VALUES ('2026-08-11', '{}', '{}', '{}', '{}')",
+            [],
+        ).expect("insert existing review");
+        let review_id = connection.last_insert_rowid();
+        connection.execute(
+            "INSERT INTO ai_reviews (review_id, model, prompt_version, facts, inferences, risks, request_status)
+             VALUES (?1, 'existing', 'v1', '[]', '[]', '[]', 'SUCCESS')",
+            [review_id],
+        ).expect("insert existing successful review");
+        let existing_id = connection.last_insert_rowid();
+
+        migrations::apply(&mut connection).expect("upgrade through 025");
+        let failures_table: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ai_review_failures'", [], |row| row.get(0),
+        ).expect("failure audit table exists");
+        let preserved: (i64, String) = connection
+            .query_row(
+                "SELECT id, request_status FROM ai_reviews WHERE id=?1",
+                [existing_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("existing review remains");
+        assert_eq!(failures_table, 1);
+        assert_eq!(preserved, (existing_id, "SUCCESS".into()));
     }
 
     #[test]
@@ -3958,7 +4040,7 @@ mod tests {
             })
             .expect("read migration count");
         assert_eq!(quote, ("000001.SH".into(), "1.25".into(), "1.25".into()));
-        assert_eq!(migration_count, 24);
+        assert_eq!(migration_count, 25);
 
         let database = DatabaseService { connection };
         let records = database
@@ -4085,7 +4167,7 @@ mod tests {
                 row.get(0)
             })
             .expect("read migration count");
-        assert_eq!(migration_count, 24);
+        assert_eq!(migration_count, 25);
     }
 
     #[test]
@@ -4156,7 +4238,7 @@ mod tests {
                 row.get(0)
             })
             .expect("read migration count");
-        assert_eq!(migration_count, 24);
+        assert_eq!(migration_count, 25);
     }
 
     #[test]

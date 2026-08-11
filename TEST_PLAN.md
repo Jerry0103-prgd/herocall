@@ -95,3 +95,9 @@
 2. `FAILED`、非成功状态或无法解析的历史记录不得阻断其他证券的复盘展示，也不得进入成功报告列表。
 3. Provider 返回非 JSON、字段类型不匹配或报告结构不合法时，后端记录经脱敏且有长度上限的本地诊断（Provider、模型、证券 ID、错误与响应），不创建成功 Context/Review；页面仅显示“AI复盘生成失败，请重新生成。”。
 4. 迁移 `024` 必须将历史 `COMPLETED` 无损归一为 `SUCCESS`，重复迁移不重复修改或删除数据。
+
+## 10. V1.1.2 AI Response Normalizer 回归
+
+1. 标准 Review Schema 优先严格解析；Provider 使用“当前个股情况/市场环境分析/消息面分析/技术面分析/风险提示/策略参考”等兼容字段时，只按明确映射转换为 `facts`、`inferences`、`risks` 与 `strategy_reference`，不补造公司、行情或资讯事实。
+2. 不能转换的响应必须写入 `ai_review_failures`，错误码为 `AI_REVIEW_PARSE_FAILED`，并保存经脱敏、限长的原始响应和错误信息；不创建 `SUCCESS` 的 `ai_reviews` 或 Context，页面只显示重新生成提示。
+3. 迁移 `025` 只新增失败审计表和索引，既有成功/失败 AI 记录均保持不变；删除关注标的时失败审计记录不遗留孤儿数据。
