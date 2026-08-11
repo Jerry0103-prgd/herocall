@@ -878,7 +878,7 @@ impl DatabaseService {
             INSERT INTO ai_reviews (
                 review_id, model, prompt_version, context_id, provider, request_status,
                 facts, inferences, risks, report_json, security_id, research_run_id
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'COMPLETED', ?6, ?7, ?8, ?9, ?10, ?11)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'SUCCESS', ?6, ?7, ?8, ?9, ?10, ?11)
             ",
             params![
                 input.review_id,
@@ -1278,7 +1278,19 @@ impl DatabaseService {
                    ar.security_id, s.name, s.symbol, ar.research_run_id, ar.created_at
             FROM ai_reviews ar LEFT JOIN securities s ON s.id = ar.security_id
             WHERE ar.review_id = ?1
-            ORDER BY CASE WHEN ar.security_id IS NULL THEN 1 ELSE 0 END, ar.created_at DESC, ar.id DESC
+              AND ar.security_id IS NOT NULL
+              AND ar.request_status = 'SUCCESS'
+              AND NOT EXISTS (
+                SELECT 1 FROM ai_reviews newer
+                WHERE newer.review_id = ar.review_id
+                  AND newer.security_id = ar.security_id
+                  AND newer.request_status = 'SUCCESS'
+                  AND (
+                    newer.created_at > ar.created_at
+                    OR (newer.created_at = ar.created_at AND newer.id > ar.id)
+                  )
+              )
+            ORDER BY ar.created_at DESC, ar.id DESC
             ",
         )?;
         let rows = statement.query_map([review_id], Self::map_ai_review)?;
@@ -3063,7 +3075,7 @@ mod tests {
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 23);
+        assert_eq!(migration_count, 24);
         assert_eq!(table_count, 29);
     }
 
@@ -3142,6 +3154,90 @@ mod tests {
             database.delete_holding(holding.id).expect("delete holding"),
             1
         );
+    }
+
+    #[test]
+    fn latest_successful_ai_reviews_are_unique_per_security_and_skip_failed_rows() {
+        let database = DatabaseService::open_in_memory().expect("initialize database");
+        let security = database
+            .create_security(new_security())
+            .expect("create followed security");
+        let review = database
+            .upsert_daily_review(NewDailyReview {
+                review_date: "2026-08-11".into(),
+                snapshot_id: None,
+                portfolio_summary: "{}".into(),
+                market_summary: "{}".into(),
+                holding_summary: "{}".into(),
+                risk_summary: "{}".into(),
+            })
+            .expect("create review");
+        let run = database
+            .create_manual_refresh_run(NewManualRefreshRun {
+                started_at: "2026-08-11T08:00:00Z".into(),
+                completed_at: "2026-08-11T08:01:00Z".into(),
+                holdings_snapshot_id: None,
+                indices_snapshot_id: None,
+                portfolio_json: "[]".into(),
+                status: "NO_DATA".into(),
+            })
+            .expect("create refresh run");
+        let context_id = database
+            .create_ai_review_context(NewAiReviewContext {
+                review_id: review.id,
+                manual_refresh_run_id: run.id,
+                portfolio_json: "[]".into(),
+                market_json: "{}".into(),
+                news_json: "{}".into(),
+                events_json: "{}".into(),
+                intelligence_json: "{}".into(),
+                research_context_json: "{}".into(),
+                research_run_id: None,
+            })
+            .expect("create context");
+        let make_review = || NewAiReview {
+            review_id: review.id,
+            model: "test-model".into(),
+            prompt_version: "test".into(),
+            context_id,
+            provider: "TEST".into(),
+            facts: "[]".into(),
+            inferences: "[]".into(),
+            risks: "[]".into(),
+            report_json: None,
+            security_id: Some(security.id),
+            research_run_id: None,
+        };
+        let first = database
+            .create_ai_review(make_review())
+            .expect("first success");
+        let second = database
+            .create_ai_review(make_review())
+            .expect("second success");
+        let third = database
+            .create_ai_review(make_review())
+            .expect("third success");
+
+        let current = database
+            .list_ai_reviews_for_daily_review(review.id)
+            .expect("read latest success");
+        assert_eq!(current.len(), 1);
+        assert_eq!(current[0].id, third.id);
+        assert_eq!(current[0].request_status, "SUCCESS");
+
+        database
+            .connection
+            .execute(
+                "UPDATE ai_reviews SET request_status='FAILED', error_code='INVALID_RESPONSE' WHERE id=?1",
+                [third.id],
+            )
+            .expect("mark latest as failed");
+        let after_failure = database
+            .list_ai_reviews_for_daily_review(review.id)
+            .expect("failed row stays hidden");
+        assert_eq!(after_failure.len(), 1);
+        assert_eq!(after_failure[0].id, second.id);
+        assert_ne!(after_failure[0].id, first.id);
     }
 
     #[test]
@@ -3621,7 +3717,7 @@ mod tests {
             })
             .expect("verify provider settings migration");
 
-        assert_eq!(migration_count, 23);
+        assert_eq!(migration_count, 24);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -3782,6 +3878,41 @@ mod tests {
     }
 
     #[test]
+    fn migration_024_normalizes_completed_reviews_without_deleting_history() {
+        let mut connection = Connection::open_in_memory().expect("create pre-024 database");
+        migrations::apply_023_for_upgrade_test(&mut connection).expect("apply through 023");
+        connection.execute(
+            "INSERT INTO daily_reviews (review_date, portfolio_summary, market_summary, holding_summary, risk_summary)
+             VALUES ('2026-08-11', '{}', '{}', '{}', '{}')",
+            [],
+        ).expect("insert review");
+        let review_id = connection.last_insert_rowid();
+        connection.execute(
+            "INSERT INTO ai_reviews (review_id, model, prompt_version, facts, inferences, risks, request_status)
+             VALUES (?1, 'legacy', 'v1', '[]', '[]', '[]', 'COMPLETED')",
+            [review_id],
+        ).expect("insert completed legacy review");
+        let legacy_id = connection.last_insert_rowid();
+
+        migrations::apply(&mut connection).expect("upgrade through 024");
+        migrations::apply(&mut connection).expect("reapply through 024");
+        let migrated: (i64, String) = connection
+            .query_row(
+                "SELECT id, request_status FROM ai_reviews WHERE id=?1",
+                [legacy_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read migrated review");
+        assert_eq!(migrated, (legacy_id, "SUCCESS".into()));
+        let migration_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .expect("count migrations");
+        assert_eq!(migration_count, 24);
+    }
+
+    #[test]
     fn migration_011_backfills_index_change_percent_without_losing_quotes() {
         let mut connection = Connection::open_in_memory().expect("create pre-011 database");
         migrations::apply_010_for_upgrade_test(&mut connection).expect("apply through 010");
@@ -3827,7 +3958,7 @@ mod tests {
             })
             .expect("read migration count");
         assert_eq!(quote, ("000001.SH".into(), "1.25".into(), "1.25".into()));
-        assert_eq!(migration_count, 23);
+        assert_eq!(migration_count, 24);
 
         let database = DatabaseService { connection };
         let records = database
@@ -3954,7 +4085,7 @@ mod tests {
                 row.get(0)
             })
             .expect("read migration count");
-        assert_eq!(migration_count, 23);
+        assert_eq!(migration_count, 24);
     }
 
     #[test]
@@ -4025,7 +4156,7 @@ mod tests {
                 row.get(0)
             })
             .expect("read migration count");
-        assert_eq!(migration_count, 23);
+        assert_eq!(migration_count, 24);
     }
 
     #[test]

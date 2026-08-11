@@ -332,8 +332,22 @@ impl AiProviderAdapter for OpenAiCompatibleProviderAdapter {
         let content = response
             .pointer("/choices/0/message/content")
             .and_then(Value::as_str)
-            .ok_or_else(|| AiProviderError::invalid_response("缺少 choices[0].message.content"))?;
-        parse_and_validate_provider_sections(content).map_err(AiProviderError::invalid_response)
+            .ok_or_else(|| {
+                let raw_response = sanitize_diagnostic_response(&response.to_string(), &self.api_key);
+                ai_diagnostic(format!(
+                    "ai_provider_response_invalid provider={} model={} security_id={} error_message=缺少 choices[0].message.content raw_response={raw_response}",
+                    self.provider, self.model, input.security_id
+                ));
+                AiProviderError::invalid_response("缺少 choices[0].message.content")
+            })?;
+        parse_and_validate_provider_sections(content).map_err(|error| {
+            let raw_response = sanitize_diagnostic_response(content, &self.api_key);
+            ai_diagnostic(format!(
+                "ai_provider_response_invalid provider={} model={} security_id={} error_message={} raw_response={raw_response}",
+                self.provider, self.model, input.security_id, error
+            ));
+            AiProviderError::invalid_response(error)
+        })
     }
 }
 
@@ -807,7 +821,16 @@ impl AiService {
             input.news["items"].as_array().map_or(0, Vec::len),
             input.events["items"].as_array().map_or(0, Vec::len),
         ));
-        let sections = provider.generate(input)?;
+        let sections = provider.generate(input).map_err(|error| {
+            ai_diagnostic(format!(
+                "ai_generation_failed provider={} model={} security_id={} error_message={}",
+                provider.provider(),
+                provider.model(),
+                input.security_id,
+                error
+            ));
+            AiServiceError::Provider(error)
+        })?;
         validate_sections(&sections)?;
         let report = report_from_sections(&sections)?;
         validate_report_against_evidence(&report, &input.research_context)?;
@@ -855,11 +878,22 @@ impl AiService {
         database: &DatabaseService,
         review_id: i64,
     ) -> Result<Vec<AiReviewView>, AiServiceError> {
-        database
+        Ok(database
             .list_ai_reviews_for_daily_review(review_id)?
             .into_iter()
-            .map(Self::view_from_record)
-            .collect()
+            .filter_map(|record| match Self::view_from_record(record.clone()) {
+                Ok(view) => Some(view),
+                Err(error) => {
+                    // A legacy corrupted row must never make all other successful reviews vanish
+                    // from the page. The raw stored payload remains untouched for local audit.
+                    ai_diagnostic(format!(
+                        "stored_ai_review_filtered review_id={} security_id={:?} error_message={}",
+                        record.id, record.security_id, error
+                    ));
+                    None
+                }
+            })
+            .collect())
     }
     pub fn latest_for_review(
         database: &DatabaseService,
@@ -1497,7 +1531,10 @@ fn curl_ai_request(url: &str, api_key: &str, body: &Value) -> Result<Value, AiPr
         }
         ai_diagnostic(format!("ai_provider_http_status={status}"));
         serde_json::from_slice(&response_body).map_err(|error| {
-            ai_diagnostic(format!("json_parse_failed=true reason={error}"));
+            ai_diagnostic(format!(
+                "json_parse_failed=true reason={error} raw_response={}",
+                sanitize_api_error_body(&response_body, api_key)
+            ));
             AiProviderError::invalid_response(error)
         })
     })();
@@ -1551,6 +1588,20 @@ fn sanitize_api_error_body(body: &[u8], api_key: &str) -> String {
 fn ai_diagnostic(message: impl fmt::Display) {
     // Deliberately contains only status, IDs, counts and server-returned text with the Key redacted.
     eprintln!("[hero-call][ai-diagnostic] {message}");
+}
+
+/// Diagnostics retain a bounded provider response for local troubleshooting, never a Keychain
+/// key. Responses are not persisted in SQLite and are only emitted after redaction.
+fn sanitize_diagnostic_response(response: &str, api_key: &str) -> String {
+    const MAX_CHARS: usize = 8_000;
+    let mut safe = response.replace(api_key, "[REDACTED]");
+    if safe.chars().count() > MAX_CHARS {
+        safe = format!(
+            "{}…<truncated>",
+            safe.chars().take(MAX_CHARS).collect::<String>()
+        );
+    }
+    safe.replace(['\n', '\r'], " ")
 }
 
 #[cfg(test)]
@@ -1731,6 +1782,18 @@ mod tests {
         }
     }
 
+    struct MalformedProvider;
+    impl AiProviderAdapter for MalformedProvider {
+        fn model(&self) -> &str {
+            "malformed-response-model"
+        }
+        fn generate(&self, _: &AiReviewInput) -> Result<AiReviewSections, AiProviderError> {
+            Err(AiProviderError::invalid_response(
+                "invalid type: sequence, expected a string",
+            ))
+        }
+    }
+
     struct FollowedSecurityProvider;
     impl AiProviderAdapter for FollowedSecurityProvider {
         fn model(&self) -> &str {
@@ -1842,6 +1905,20 @@ mod tests {
         let review = stored_review_and_snapshot(&database);
         assert!(matches!(
             AiService::generate_with_provider(&database, "2026-08-08", &FailingProvider),
+            Err(AiServiceError::Provider(_))
+        ));
+        assert!(AiService::latest_for_review(&database, review.id)
+            .unwrap()
+            .is_none());
+        assert_eq!(database.ai_review_context_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn malformed_provider_response_never_persists_a_successful_review() {
+        let database = DatabaseService::open_in_memory().unwrap();
+        let review = stored_review_and_snapshot(&database);
+        assert!(matches!(
+            AiService::generate_with_provider(&database, "2026-08-08", &MalformedProvider),
             Err(AiServiceError::Provider(_))
         ));
         assert!(AiService::latest_for_review(&database, review.id)

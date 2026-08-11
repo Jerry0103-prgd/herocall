@@ -36,6 +36,17 @@ function safeErrorMessage(error: unknown) {
   return "AI复盘服务暂不可用";
 }
 
+function formatGeneratedAt(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "未确认";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  }).formatToParts(date);
+  const field = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${field("year")}-${field("month")}-${field("day")} ${field("hour")}:${field("minute")}:${field("second")}`;
+}
+
 const impactStars: Record<string, string> = { HIGH: "★★★★★", MEDIUM: "★★★", LOW: "★★" };
 const riskLabel: Record<string, string> = { HIGH: "高风险", MEDIUM: "中风险", LOW: "低风险" };
 const catalystLabel: Record<string, string> = { "1D": "未来1天", "3D": "未来3天", "7D": "未来7天" };
@@ -66,7 +77,7 @@ function ReportTable({ review }: { review: AiReview }) {
     <article className="ai-report-wrap">
       <div className="ai-report-heading">
         <div><p className="section-kicker">{review.model}</p><h3>{title}</h3></div>
-        <span>仅供信息整理与观察，不构成交易建议。</span>
+        <div><span>仅供信息整理与观察，不构成交易建议。</span><small className="ai-report-generated-at">AI复盘生成：{formatGeneratedAt(review.createdAt)}</small></div>
       </div>
       {review.report?.coreDrivers?.length ? <ResearchV2Cards review={review} /> : <div className="ai-report-table-scroll"><table className="ai-report-table"><thead><tr><th>分析维度</th><th>AI复盘结果</th></tr></thead><tbody>{reportLabels.map(([label, key]) => <tr key={key}><th scope="row">{label}</th><td>{review.report?.[key] ?? "暂无数据"}</td></tr>)}</tbody></table></div>}
       <details className="ai-audit-details"><summary>查看 FACTS / INFERENCES / RISKS 审计依据</summary><div className="ai-audit-grid"><section><strong>FACTS</strong><ul>{review.facts.map((item) => <li key={item}>{item}</li>)}</ul></section><section><strong>INFERENCES</strong><ul>{review.inferences.map((item) => <li key={item}>{item}</li>)}</ul></section><section><strong>RISKS</strong><ul>{review.risks.map((item) => <li key={item}>{item}</li>)}</ul></section></div></details>
@@ -96,7 +107,8 @@ export function ReviewPage() {
       setState(followedSecurityReviews.length > 0 ? "success" : "idle");
       setMessage(null);
     } catch (error) {
-      setMessage(safeErrorMessage(error));
+      console.error("AI review generation failed", error);
+      setMessage("AI复盘生成失败，请重新生成。");
     } finally {
       setIsLoading(false);
     }

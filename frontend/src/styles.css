@@ -107,6 +107,8 @@ h2 { margin: 0; font-size: 19px; }
 .watchlist-main { display: grid; gap: 4px; min-width: 0; }
 .watchlist-main small { color: #8798ae; font-size: 12px; }
 .watchlist-main .profile-pending { color: #71839b; }
+.ai-report-heading > div:last-child { display: grid; gap: 5px; justify-items: end; }
+.ai-report-generated-at { color: #71839b; font-size: 11px; font-variant-numeric: tabular-nums; }
 .quote-up { color: #ef737a; }
 .quote-down { color: #70cfac; }
 .quote-flat { color: #94a3b8; }
