@@ -14,6 +14,7 @@ pub mod market_service;
 mod news_service;
 pub mod portfolio_service;
 mod portfolio_ui_service;
+mod research_service;
 mod review_service;
 mod secure_storage;
 mod settings_service;

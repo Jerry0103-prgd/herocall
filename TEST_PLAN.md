@@ -61,3 +61,12 @@
 ## 5. 测试数据策略
 
 领域测试可使用明确标识为“测试夹具”的静态样本，仅用于验证计算与解析，不得进入产品行情展示。Adapter 测试使用录制响应、模拟服务器或官方沙箱；生产展示只使用可追溯的实际获取结果。
+
+## 6. V1.1.0 Research Agent 回归
+
+1. 历史行情不足 20 个交易日时，只经历史行情 Adapter 补齐并保存带来源、行情时间与抓取时间的记录；解析失败或数据不足时技术快照必须为 `INSUFFICIENT_HISTORY`。
+2. MA5/10/20、5/10/20 日涨跌、20 日高低点和量能相对值均由 Rust decimal 计算，使用明确夹具验证结果。
+3. 每次 AI 生成创建一个 `research_runs`，逐证券的 `ai_review_contexts`、`ai_reviews` 与 `research_evidence` 均绑定该 ID；旧 AI 记录仍可读取。
+4. News/Event 仅通过 `news_security_links`/`event_security_links` 与 `security_id` 筛选，按 URL 或标题加时间去重，最多分别发送 10 条；禁止以用户可见关联字符串匹配。
+5. 序列化给 Provider 的 Evidence Context 不得包含 `quantity`、`averageCost`、`marketValue`、`dailyPnl`、`totalPnl` 或账户资产字段；缺少板块、资讯、事件或技术数据必须明确为 `NO_DATA`/`UNAVAILABLE`。
+6. Provider 输出必须包含 FACTS、INFERENCES、ACTIONS、RISKS 和 CONCLUSION；允许带触发条件的研究型动作表达，但拒绝目标价、收益承诺、保证收益、必涨/必跌和伪造事实。

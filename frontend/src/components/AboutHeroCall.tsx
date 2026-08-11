@@ -7,6 +7,17 @@ type ReleaseNote = {
 
 const releaseNotes: ReleaseNote[] = [
   {
+    version: "V1.1.0",
+    date: "2026-08-11",
+    summary: "AI复盘升级为 Research Agent 模式",
+    groups: [
+      { title: "新增", items: [
+        "分析前自动准备个股行情、历史走势、公告、事件及技术数据",
+        "基于可追溯 Evidence Context 逐股生成研究报告",
+      ] },
+    ],
+  },
+  {
     version: "V1.0.12",
     date: "2026-08-11",
     summary: "新增关注后自动获取单只行情",

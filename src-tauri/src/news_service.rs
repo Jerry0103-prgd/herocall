@@ -209,6 +209,18 @@ impl NewsService {
             .collect()
     }
 
+    pub fn list_for_run_and_security(
+        database: &DatabaseService,
+        run_id: i64,
+        security_id: i64,
+    ) -> Result<Vec<NewsArticleView>, NewsServiceError> {
+        database
+            .list_news_articles_for_run_and_security(run_id, security_id)?
+            .into_iter()
+            .map(Self::view_from_record)
+            .collect()
+    }
+
     pub fn list(database: &DatabaseService) -> Result<Vec<NewsArticleView>, NewsServiceError> {
         database
             .list_news_articles()?

@@ -4,6 +4,7 @@
 //! immutable context or output is persisted; failed, malformed, or unsafe responses are not kept.
 
 use std::{
+    collections::HashSet,
     error::Error,
     fmt, fs,
     io::Write,
@@ -17,16 +18,21 @@ use serde_json::{json, Value};
 use crate::{
     database::service::{
         AiReview, DatabaseError, DatabaseService, NewAiReview, NewAiReviewContext,
+        NewResearchEvidence,
     },
-    event_service::{EventService, EventServiceError},
-    news_service::{NewsService, NewsServiceError},
+    event_service::{EventService, EventServiceError, EventView},
+    market_refresh_service::MarketRefreshService,
+    news_service::{NewsArticleView, NewsService, NewsServiceError},
+    research_service::{
+        calculate_technical_snapshot, EastmoneyPriceHistoryAdapter, ResearchService,
+    },
     review_service::{DailyReviewView, ReviewService, ReviewServiceError},
     secure_storage::{
         get_ai_provider_key_status, get_deepseek_status, load_ai_provider_api_key_for_adapter,
     },
 };
 
-const PROMPT_VERSION: &str = "ai-research-report-v4";
+const PROMPT_VERSION: &str = "research-agent-evidence-v1";
 const DEEPSEEK_MODEL: &str = "deepseek-chat";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -81,6 +87,8 @@ pub struct AiReviewSections {
     pub strategy_reference: Option<String>,
     #[serde(default, rename = "conclusion")]
     pub conclusion: Option<String>,
+    #[serde(default, rename = "actions")]
+    pub actions: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -93,6 +101,8 @@ pub struct AiResearchReport {
     pub technical_analysis: String,
     pub strategy_reference: String,
     pub conclusion: String,
+    #[serde(default)]
+    pub actions: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -119,11 +129,17 @@ pub struct AiReviewView {
 pub struct AiReviewInput {
     pub prompt_version: String,
     pub manual_refresh_run_id: i64,
+    pub research_run_id: Option<i64>,
+    #[serde(skip)]
     pub daily_review: DailyReviewView,
+    /// Retained for persistence compatibility only. It is never serialized to the model.
+    #[serde(skip)]
     pub portfolio: Value,
     pub market: Value,
     pub news: Value,
     pub events: Value,
+    pub security: Value,
+    pub sector: Value,
     pub security_id: i64,
     pub security_name: String,
     pub security_symbol: String,
@@ -219,7 +235,7 @@ impl AiProviderAdapter for OpenAiCompatibleProviderAdapter {
 }
 
 fn research_report_system_prompt() -> &'static str {
-    "你是个人A股关注标的的解释助手。仅依据输入 JSON，输出严格 JSON 对象，必须包含：facts:[string]、inferences:[string]、risks:[string]、stock_status:string、market_analysis:string、sector_analysis:string、news_analysis:string、technical_analysis:string、strategy_reference:string、conclusion:string。FACTS 只陈述有来源和时间的输入事实；INFERENCES 必须是基于这些事实的解释；RISKS 只列不确定性、数据缺失或需核验事项。七项报告依次为：当前个股情况、市场环境分析、所属板块分析、消息面分析、技术面分析、策略参考、综合结论。当前个股情况须优先引用本次快照的当前价格、涨跌幅、成交与时间；市场环境须引用四个主要指数及其来源时间；消息面须区分公告、媒体与社区观点，并说明事件确认状态。仅讨论本次输入的单只关注标的，不得提及持仓成本、盈亏、是否实际持仓或账户资产。无行业、新闻、事件、板块或技术指标时须明确“未确认”或“暂无数据”，不得补造内容。策略参考只能描述关注逻辑、风险关注和后续观察条件；综合结论只能总结当前判断，不得给出交易动作。社区观点不能作为事实。严禁买入、卖出、加仓、减仓、建仓、清仓、推荐、目标价、收益预测、收益承诺、保证收益、必涨，且不得补造事实。"
+    "你是个人股票研究与复盘助手。仅依据输入 JSON 的 Evidence Context，输出严格 JSON 对象，必须包含：facts:[string]、inferences:[string]、actions:string、risks:[string]、stock_status:string、market_analysis:string、sector_analysis:string、news_analysis:string、technical_analysis:string、strategy_reference:string、conclusion:string。FACTS 只能陈述带 source、时间或 evidence 的输入事实；INFERENCES 必须说明基于哪些事实推断；ACTIONS 是研究型的条件化策略参考；RISKS 只列不确定性、数据缺失或需核验事项。逐项输出：当前个股情况、市场环境、所属板块/行业、消息面、技术面、策略参考、综合结论。技术面只能基于 technical 字段；sector.status 为 UNAVAILABLE 或资料缺失时，必须写“暂无可验证板块数据”，不得猜测行业或概念。news 中 COMMUNITY 只能称为“社区观点”，不得作为事实。不得提及持仓成本、盈亏、是否实际持仓或账户资产。允许以条件化语言表达买入、卖出、加仓、减仓、持有、观望、止盈、止损等研究动作，但必须给出触发条件、依据与风险；严禁目标价、收益预测、收益承诺、保证收益、必涨、必跌、稳赚或任何未来确定性陈述。数据缺失时明确“暂无数据”或“未确认”，绝不补造事实。"
 }
 
 fn provider_display_name(provider: &str) -> &'static str {
@@ -359,9 +375,35 @@ impl AiService {
         review_date: &str,
     ) -> Result<Vec<AiReviewView>, AiServiceError> {
         let result = (|| {
+            // The planner prepares a trusted user-equivalent snapshot only when no usable
+            // snapshot exists or the latest boundary is older than five minutes. This is an
+            // action-triggered refresh, never a background polling loop.
+            let needs_refresh = database
+                .latest_manual_refresh_run()?
+                .as_ref()
+                .is_none_or(|run| snapshot_is_stale(&run.completed_at));
+            if needs_refresh {
+                MarketRefreshService::refresh_today_snapshot(database).map_err(|error| {
+                    AiServiceError::Context(format!("研究数据准备失败：{error}"))
+                })?;
+            }
             let _ = ReviewService::generate(database, review_date)?;
             let adapter = Self::selected_runtime_provider(database)?;
-            Self::generate_for_all_followed_securities(database, review_date, &adapter)
+            let research_run = database.create_research_run(&Utc::now().to_rfc3339())?;
+            let generated = Self::generate_for_all_followed_securities(
+                database,
+                review_date,
+                &adapter,
+                Some(research_run.id),
+            )?;
+            let latest = database.latest_manual_refresh_run()?;
+            database.complete_research_run(
+                research_run.id,
+                &Utc::now().to_rfc3339(),
+                latest.and_then(|run| run.indices_snapshot_id),
+                "COMPLETED",
+            )?;
+            Ok(generated)
         })();
         if let Err(error) = &result {
             ai_diagnostic(format!("rust_final_error={error}"));
@@ -491,11 +533,14 @@ impl AiService {
         let input = AiReviewInput {
             prompt_version: PROMPT_VERSION.into(),
             manual_refresh_run_id: run.id,
+            research_run_id: None,
             daily_review,
             portfolio,
             market,
             news: json!({"status": if news_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": news_items}),
             events: json!({"status": if event_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": event_items}),
+            security: json!({"name": "历史综合复盘", "status": "LEGACY"}),
+            sector: json!({"status": "UNAVAILABLE"}),
             security_id: 0,
             security_name: "历史综合复盘".into(),
             security_symbol: String::new(),
@@ -516,6 +561,7 @@ impl AiService {
         let context_id = database.create_ai_review_context(NewAiReviewContext {
             review_id: input.daily_review.id,
             manual_refresh_run_id: input.manual_refresh_run_id,
+            research_run_id: input.research_run_id,
             portfolio_json: serde_json::to_string(&input.portfolio)?,
             market_json: serde_json::to_string(&input.market)?,
             news_json: serde_json::to_string(&input.news)?,
@@ -535,6 +581,7 @@ impl AiService {
             risks: serde_json::to_string(&sections.risks)?,
             report_json: Some(serde_json::to_string(&report)?),
             security_id: None,
+            research_run_id: input.research_run_id,
         })?;
         Self::view_from_record(stored)
     }
@@ -543,18 +590,16 @@ impl AiService {
         database: &DatabaseService,
         review_date: &str,
         provider: &P,
+        research_run_id: Option<i64>,
     ) -> Result<Vec<AiReviewView>, AiServiceError> {
         let daily_review = ReviewService::get(database, review_date)?;
         let run = database
             .latest_manual_refresh_run()?
             .ok_or(AiServiceError::NoManualSnapshot)?;
-        let portfolio: Value = serde_json::from_str(&run.portfolio_json)?;
         let all_holding_quotes =
             database.list_market_quotes_for_snapshot(run.holdings_snapshot_id)?;
         let index_quotes =
             database.list_market_index_quotes_for_snapshot(run.indices_snapshot_id)?;
-        let all_news = NewsService::list_for_manual_refresh_run(database, run.id)?;
-        let all_events = EventService::list_for_manual_refresh_run(database, run.id)?;
         let securities = database.list_market_securities_for_holdings()?;
         if securities.is_empty() {
             return Err(AiServiceError::Context("当前没有关注标的".into()));
@@ -562,52 +607,50 @@ impl AiService {
 
         let mut generated = Vec::with_capacity(securities.len());
         for security in securities {
-            let security_marker = format!("({})", security.symbol);
-            let security_portfolio = portfolio
-                .as_array()
-                .and_then(|items| {
-                    items.iter().find(|item| {
-                        item.get("symbol").and_then(Value::as_str) == Some(&security.symbol)
-                    })
-                })
-                .cloned()
-                .unwrap_or_else(|| {
-                    json!({"symbol": security.symbol, "name": security.name, "status": "关注标的"})
-                });
+            let security_context = json!({
+                "symbol": security.symbol,
+                "name": security.name,
+                "market": security.market,
+                "securityType": "STOCK"
+            });
+            let history = ResearchService::ensure_price_history(
+                database,
+                &security,
+                20,
+                &EastmoneyPriceHistoryAdapter,
+            )
+            .unwrap_or_default();
+            let technical = calculate_technical_snapshot(&history);
             let holding_quotes = all_holding_quotes
                 .iter()
                 .filter(|quote| quote.symbol == security.symbol)
                 .collect::<Vec<_>>();
-            let news_items = all_news
-                .iter()
-                .filter(|article| {
-                    article
-                        .related_security
-                        .as_deref()
-                        .is_some_and(|related| related.contains(&security_marker))
-                })
-                .collect::<Vec<_>>();
-            let event_items = all_events
-                .iter()
-                .filter(|event| {
-                    event
-                        .related_security
-                        .as_deref()
-                        .is_some_and(|related| related.contains(&security_marker))
-                })
-                .collect::<Vec<_>>();
+            let news_items = deduplicate_news(NewsService::list_for_run_and_security(
+                database,
+                run.id,
+                security.security_id,
+            )?);
+            let event_items = deduplicate_events(EventService::list_for_run_and_security(
+                database,
+                run.id,
+                security.security_id,
+            )?);
             let input = AiReviewInput {
                 prompt_version: PROMPT_VERSION.into(),
                 manual_refresh_run_id: run.id,
+                research_run_id,
                 daily_review: daily_review.clone(),
-                portfolio: security_portfolio,
+                portfolio: Value::Null,
                 market: json!({
                     "holding": holding_quotes,
                     "indices": index_quotes,
+                    "technical": technical,
                     "snapshotCompletedAt": run.completed_at,
                 }),
                 news: json!({"status": if news_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": news_items}),
                 events: json!({"status": if event_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": event_items}),
+                security: security_context,
+                sector: json!({"status": "UNAVAILABLE", "reason": "当前没有可靠板块数据源"}),
                 security_id: security.security_id,
                 security_name: security.name,
                 security_symbol: security.symbol,
@@ -624,6 +667,7 @@ impl AiService {
         input: &AiReviewInput,
         provider: &P,
     ) -> Result<AiReviewView, AiServiceError> {
+        persist_research_evidence(database, input)?;
         ai_diagnostic(format!(
             "ai_context_generated=true manual_refresh_run_id={} security_id={} holding_quotes={} index_quotes={} news_items={} event_items={}",
             input.manual_refresh_run_id,
@@ -639,6 +683,7 @@ impl AiService {
         let context_id = database.create_ai_review_context(NewAiReviewContext {
             review_id: input.daily_review.id,
             manual_refresh_run_id: input.manual_refresh_run_id,
+            research_run_id: input.research_run_id,
             portfolio_json: serde_json::to_string(&input.portfolio)?,
             market_json: serde_json::to_string(&input.market)?,
             news_json: serde_json::to_string(&input.news)?,
@@ -655,6 +700,7 @@ impl AiService {
             risks: serde_json::to_string(&sections.risks)?,
             report_json: Some(serde_json::to_string(&report)?),
             security_id: Some(input.security_id),
+            research_run_id: input.research_run_id,
         })?;
         Self::view_from_record(stored)
     }
@@ -690,6 +736,7 @@ impl AiService {
             technical_analysis: None,
             strategy_reference: None,
             conclusion: None,
+            actions: None,
         };
         validate_sections(&sections)?;
         let report = record
@@ -717,6 +764,32 @@ impl AiService {
     }
 }
 
+fn persist_research_evidence(
+    database: &DatabaseService,
+    input: &AiReviewInput,
+) -> Result<(), AiServiceError> {
+    let Some(research_run_id) = input.research_run_id else {
+        return Ok(());
+    };
+    for (evidence_type, payload) in [
+        ("MARKET", &input.market),
+        ("NEWS", &input.news),
+        ("EVENT", &input.events),
+    ] {
+        database.create_research_evidence(NewResearchEvidence {
+            research_run_id,
+            security_id: input.security_id,
+            evidence_type: evidence_type.into(),
+            source: None,
+            source_type: None,
+            published_at: None,
+            source_url: None,
+            payload_json: serde_json::to_string(payload)?,
+        })?;
+    }
+    Ok(())
+}
+
 fn mark_current_provider(configs: &mut [AiProviderConfigView]) {
     let current = configs
         .iter()
@@ -726,6 +799,50 @@ fn mark_current_provider(configs: &mut [AiProviderConfigView]) {
     for provider in configs {
         provider.is_current = current.as_deref() == Some(provider.provider.as_str());
     }
+}
+
+fn snapshot_is_stale(completed_at: &str) -> bool {
+    chrono::DateTime::parse_from_rfc3339(completed_at)
+        .map(|timestamp| {
+            Utc::now()
+                .signed_duration_since(timestamp.with_timezone(&Utc))
+                .num_minutes()
+                >= 5
+        })
+        .unwrap_or(true)
+}
+
+/// Deduplicate the bounded evidence list by canonical URL, falling back to title + publication
+/// time. This keeps announcement copies from inflating the Provider prompt.
+fn deduplicate_news(items: Vec<NewsArticleView>) -> Vec<NewsArticleView> {
+    let mut seen = HashSet::new();
+    items
+        .into_iter()
+        .filter(|item| {
+            let key = if item.url.trim().is_empty() {
+                format!("{}|{}", item.title, item.published_at)
+            } else {
+                item.url.clone()
+            };
+            seen.insert(key)
+        })
+        .take(10)
+        .collect()
+}
+
+fn deduplicate_events(items: Vec<EventView>) -> Vec<EventView> {
+    let mut seen = HashSet::new();
+    items
+        .into_iter()
+        .filter(|item| {
+            let key = item
+                .source_url
+                .clone()
+                .unwrap_or_else(|| format!("{}|{}", item.title, item.event_time));
+            seen.insert(key)
+        })
+        .take(10)
+        .collect()
 }
 
 fn parse_and_validate_provider_sections(value: &str) -> Result<AiReviewSections, AiServiceError> {
@@ -744,6 +861,7 @@ fn report_from_sections(sections: &AiReviewSections) -> Result<AiResearchReport,
         technical_analysis: required_report_field(&sections.technical_analysis)?,
         strategy_reference: required_report_field(&sections.strategy_reference)?,
         conclusion: required_report_field(&sections.conclusion)?,
+        actions: required_report_field(&sections.actions)?,
     };
     validate_report(&report)?;
     Ok(report)
@@ -777,6 +895,13 @@ fn validate_report(report: &AiResearchReport) -> Result<(), AiServiceError> {
             ));
         }
     }
+    // Reports saved before V1.1.0 have no ACTIONS field and remain readable. New reports are
+    // required to provide it by `report_from_sections` above.
+    if !report.actions.trim().is_empty() && contains_prohibited_language(&report.actions) {
+        return Err(AiServiceError::InvalidOutput(
+            "AI输出包含禁止的投资建议或预测",
+        ));
+    }
     Ok(())
 }
 fn validate_sections(sections: &AiReviewSections) -> Result<(), AiServiceError> {
@@ -799,22 +924,18 @@ fn validate_sections(sections: &AiReviewSections) -> Result<(), AiServiceError> 
 }
 fn contains_prohibited_language(value: &str) -> bool {
     const PROHIBITED: &[&str] = &[
-        "买入",
-        "卖出",
-        "加仓",
-        "减仓",
-        "建仓",
-        "清仓",
-        "推荐",
         "目标价",
         "收益预测",
         "收益承诺",
         "保证收益",
         "必涨",
+        "必跌",
+        "稳赚",
+        "一定上涨",
+        "一定下跌",
         "price target",
         "guaranteed return",
-        "buy",
-        "sell",
+        "guaranteed profit",
     ];
     let lower = value.to_lowercase();
     PROHIBITED.iter().any(|term| lower.contains(term))
@@ -1162,6 +1283,7 @@ mod tests {
                 technical_analysis: Some("暂无完整技术指标，需结合后续快照观察。".into()),
                 strategy_reference: Some("保留原有关注逻辑，并持续观察数据完整性。".into()),
                 conclusion: Some("当前数据有限，结论仅供后续观察。".into()),
+                actions: Some("继续观察数据完整性与后续变化。".into()),
             })
         }
     }
@@ -1186,6 +1308,12 @@ mod tests {
             assert_eq!(input.security_name, "贵州茅台");
             assert_eq!(input.news["status"], "NO_DATA");
             assert_eq!(input.events["status"], "NO_DATA");
+            let serialized = serde_json::to_string(input).expect("serialize evidence context");
+            assert!(!serialized.contains("quantity"));
+            assert!(!serialized.contains("averageCost"));
+            assert!(!serialized.contains("dailyPnl"));
+            assert!(!serialized.contains("totalPnl"));
+            assert_eq!(input.sector["status"], "UNAVAILABLE");
             Ok(AiReviewSections {
                 facts: vec!["已保存行情快照仅供事实核验。".into()],
                 inferences: vec!["关注标的分析只基于本次已保存数据。".into()],
@@ -1197,6 +1325,7 @@ mod tests {
                 technical_analysis: Some("暂无完整技术指标。".into()),
                 strategy_reference: Some("持续观察行情、板块和消息面的后续变化。".into()),
                 conclusion: Some("当前结论仅基于本次已保存数据。".into()),
+                actions: Some("继续观察行情和后续公告。".into()),
             })
         }
     }
@@ -1252,10 +1381,14 @@ mod tests {
             .unwrap();
         database.create_watchlist_item(security.id).unwrap();
 
+        let research_run = database
+            .create_research_run("2026-08-08T08:01:00Z")
+            .expect("create research run");
         let generated = AiService::generate_for_all_followed_securities(
             &database,
             "2026-08-08",
             &FollowedSecurityProvider,
+            Some(research_run.id),
         )
         .unwrap();
 
@@ -1263,6 +1396,13 @@ mod tests {
         assert_eq!(generated[0].security_id, Some(security.id));
         assert_eq!(generated[0].security_symbol.as_deref(), Some("600519"));
         assert_eq!(database.ai_review_context_count().unwrap(), 1);
+        assert_eq!(
+            database
+                .get_ai_review(generated[0].id)
+                .expect("read generated review")
+                .research_run_id,
+            Some(research_run.id)
+        );
         assert_eq!(
             AiService::list_for_review(&database, review.id)
                 .unwrap()
@@ -1276,7 +1416,7 @@ mod tests {
         assert!(parse_and_validate_provider_sections(r#"{"facts":[]}"#).is_err());
         assert!(matches!(
             parse_and_validate_provider_sections(
-                r#"{"facts":["行情暂无数据"],"inferences":["建议买入"],"risks":["需要核验来源"]}"#
+                r#"{"facts":["行情暂无数据"],"inferences":["目标价为100元"],"risks":["需要核验来源"]}"#
             ),
             Err(AiServiceError::InvalidOutput(_))
         ));
@@ -1295,6 +1435,7 @@ mod tests {
                 market_json: "{}".into(),
                 news_json: "{}".into(),
                 events_json: "{}".into(),
+                research_run_id: None,
             })
             .unwrap();
         database
@@ -1309,6 +1450,7 @@ mod tests {
                 risks: serde_json::to_string(&vec!["已保存风险".to_string()]).unwrap(),
                 report_json: None,
                 security_id: None,
+                research_run_id: None,
             })
             .unwrap();
 

@@ -36,7 +36,17 @@
 | `event_security_links` | `event_id`, `security_id` | 事件与证券的多对多关联；删除一只关注标的时保护其他证券仍需的事件正文 |
 | `app_settings` | `setting_key`, `setting_value`, `updated_at` | 非敏感应用状态；V0.8.1 仅保存首次启动完成标志，禁止存储 API Key、Token 或券商信息 |
 
-`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）至 `020`（AI Provider 模型配置）；迁移重复执行不会重新执行已应用版本，已应用迁移的校验标识不匹配会阻止继续启动。
+`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）至 `021`（Research Agent）；迁移重复执行不会重新执行已应用版本，已应用迁移的校验标识不匹配会阻止继续启动。
+
+### V1.1.0 Research Agent 追加实体（迁移 `021`）
+
+| 表 | 主要字段 | 说明 |
+| --- | --- | --- |
+| `research_runs` | `id`, `started_at`, `completed_at`, `indices_snapshot_id`, `status` | 一次 AI 研究的数据边界；同次输出只能引用该边界准备的数据。 |
+| `security_price_history` | `security_id`, `trade_date`, `open_price`, `high_price`, `low_price`, `close_price`, `volume`, `amount`, `change_percent`, `source`, `market_timestamp`, `fetched_at` | 来源可追溯的日线历史数据；以 `(security_id, trade_date, source)` 去重，缺失时明确为不可用而非补值。 |
+| `research_evidence` | `research_run_id`, `security_id`, `evidence_type`, `source*`, `payload_json` | 冻结实际送入模型前的市场、资讯、事件证据载荷，保留可审计追溯信息。 |
+
+`ai_review_contexts.research_run_id` 与 `ai_reviews.research_run_id` 由 `021` 追加，旧记录为 `NULL` 且保持可读；新生成的逐证券报告必须绑定当前 `research_runs`。历史 `portfolio_json` 字段为兼容审计列，V1.1.0 Provider 输入不会序列化账户、数量、成本或盈亏字段。
 
 ## 3. 延后实现的逻辑实体
 

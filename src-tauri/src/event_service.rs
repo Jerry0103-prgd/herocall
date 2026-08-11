@@ -166,6 +166,18 @@ impl From<DatabaseError> for EventServiceError {
 pub struct EventService;
 
 impl EventService {
+    pub fn list_for_run_and_security(
+        database: &DatabaseService,
+        run_id: i64,
+        security_id: i64,
+    ) -> Result<Vec<EventView>, EventServiceError> {
+        database
+            .list_events_for_run_and_security(run_id, security_id)?
+            .into_iter()
+            .map(Self::view_from_record)
+            .collect()
+    }
+
     pub fn create(
         database: &DatabaseService,
         input: EventInput,

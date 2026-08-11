@@ -175,10 +175,48 @@ pub struct NewManualRefreshRun {
     pub status: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResearchRun {
+    pub id: i64,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub indices_snapshot_id: Option<i64>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredPriceHistoryBar {
+    pub security_id: i64,
+    pub trade_date: String,
+    pub open_price: String,
+    pub high_price: String,
+    pub low_price: String,
+    pub close_price: String,
+    pub volume: String,
+    pub amount: String,
+    pub change_percent: Option<String>,
+    pub source: String,
+    pub market_timestamp: String,
+    pub fetched_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewResearchEvidence {
+    pub research_run_id: i64,
+    pub security_id: i64,
+    pub evidence_type: String,
+    pub source: Option<String>,
+    pub source_type: Option<String>,
+    pub published_at: Option<String>,
+    pub source_url: Option<String>,
+    pub payload_json: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewAiReviewContext {
     pub review_id: i64,
     pub manual_refresh_run_id: i64,
+    pub research_run_id: Option<i64>,
     pub portfolio_json: String,
     pub market_json: String,
     pub news_json: String,
@@ -278,6 +316,7 @@ pub struct AiReview {
     pub security_id: Option<i64>,
     pub security_name: Option<String>,
     pub security_symbol: Option<String>,
+    pub research_run_id: Option<i64>,
     pub created_at: String,
 }
 
@@ -293,6 +332,7 @@ pub struct NewAiReview {
     pub risks: String,
     pub report_json: Option<String>,
     pub security_id: Option<i64>,
+    pub research_run_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -637,8 +677,8 @@ impl DatabaseService {
             "
             INSERT INTO ai_reviews (
                 review_id, model, prompt_version, context_id, provider, request_status,
-                facts, inferences, risks, report_json, security_id
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'COMPLETED', ?6, ?7, ?8, ?9, ?10)
+                facts, inferences, risks, report_json, security_id, research_run_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'COMPLETED', ?6, ?7, ?8, ?9, ?10, ?11)
             ",
             params![
                 input.review_id,
@@ -651,6 +691,7 @@ impl DatabaseService {
                 input.risks,
                 input.report_json,
                 input.security_id,
+                input.research_run_id,
             ],
         )?;
         self.get_ai_review(self.connection.last_insert_rowid())
@@ -677,6 +718,96 @@ impl DatabaseService {
             ],
         )?;
         self.get_manual_refresh_run(self.connection.last_insert_rowid())
+    }
+
+    pub fn create_research_run(&self, started_at: &str) -> DatabaseResult<ResearchRun> {
+        self.connection.execute(
+            "INSERT INTO research_runs (started_at, status) VALUES (?1, 'PREPARING')",
+            [started_at],
+        )?;
+        self.get_research_run(self.connection.last_insert_rowid())
+    }
+
+    pub fn complete_research_run(
+        &self,
+        id: i64,
+        completed_at: &str,
+        indices_snapshot_id: Option<i64>,
+        status: &str,
+    ) -> DatabaseResult<ResearchRun> {
+        self.connection.execute(
+            "UPDATE research_runs SET completed_at=?1, indices_snapshot_id=?2, status=?3 WHERE id=?4",
+            params![completed_at, indices_snapshot_id, status, id],
+        )?;
+        self.get_research_run(id)
+    }
+
+    pub fn create_research_evidence(&self, input: NewResearchEvidence) -> DatabaseResult<i64> {
+        self.connection.execute(
+            "INSERT INTO research_evidence (research_run_id, security_id, evidence_type, source, source_type, published_at, source_url, payload_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                input.research_run_id,
+                input.security_id,
+                input.evidence_type,
+                input.source,
+                input.source_type,
+                input.published_at,
+                input.source_url,
+                input.payload_json,
+            ],
+        )?;
+        Ok(self.connection.last_insert_rowid())
+    }
+
+    pub fn get_research_run(&self, id: i64) -> DatabaseResult<ResearchRun> {
+        self.connection.query_row(
+            "SELECT id, started_at, completed_at, indices_snapshot_id, status FROM research_runs WHERE id=?1",
+            [id],
+            |row| Ok(ResearchRun { id: row.get(0)?, started_at: row.get(1)?, completed_at: row.get(2)?, indices_snapshot_id: row.get(3)?, status: row.get(4)? }),
+        ).map_err(Into::into)
+    }
+
+    pub fn upsert_price_history(&self, bars: &[StoredPriceHistoryBar]) -> DatabaseResult<()> {
+        for bar in bars {
+            self.connection.execute(
+                "INSERT INTO security_price_history (security_id, trade_date, open_price, high_price, low_price, close_price, volume, amount, change_percent, source, market_timestamp, fetched_at)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+                 ON CONFLICT(security_id, trade_date, source) DO UPDATE SET open_price=excluded.open_price,high_price=excluded.high_price,low_price=excluded.low_price,close_price=excluded.close_price,volume=excluded.volume,amount=excluded.amount,change_percent=excluded.change_percent,market_timestamp=excluded.market_timestamp,fetched_at=excluded.fetched_at",
+                params![bar.security_id, bar.trade_date, bar.open_price, bar.high_price, bar.low_price, bar.close_price, bar.volume, bar.amount, bar.change_percent, bar.source, bar.market_timestamp, bar.fetched_at],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn list_price_history(
+        &self,
+        security_id: i64,
+        limit: i64,
+    ) -> DatabaseResult<Vec<StoredPriceHistoryBar>> {
+        let mut statement = self.connection.prepare(
+            "SELECT security_id, trade_date, open_price, high_price, low_price, close_price, volume, amount, change_percent, source, market_timestamp, fetched_at FROM security_price_history WHERE security_id=?1 ORDER BY trade_date DESC LIMIT ?2"
+        )?;
+        let mut values = statement
+            .query_map(params![security_id, limit], |row| {
+                Ok(StoredPriceHistoryBar {
+                    security_id: row.get(0)?,
+                    trade_date: row.get(1)?,
+                    open_price: row.get(2)?,
+                    high_price: row.get(3)?,
+                    low_price: row.get(4)?,
+                    close_price: row.get(5)?,
+                    volume: row.get(6)?,
+                    amount: row.get(7)?,
+                    change_percent: row.get(8)?,
+                    source: row.get(9)?,
+                    market_timestamp: row.get(10)?,
+                    fetched_at: row.get(11)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        values.reverse();
+        Ok(values)
     }
 
     pub fn get_manual_refresh_run(&self, id: i64) -> DatabaseResult<ManualRefreshRun> {
@@ -721,10 +852,10 @@ impl DatabaseService {
     pub fn create_ai_review_context(&self, input: NewAiReviewContext) -> DatabaseResult<i64> {
         self.connection.execute(
             "INSERT INTO ai_review_contexts (
-                review_id, manual_refresh_run_id, portfolio_json, market_json, news_json, events_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![input.review_id, input.manual_refresh_run_id, input.portfolio_json,
-                input.market_json, input.news_json, input.events_json],
+                review_id, manual_refresh_run_id, research_run_id, portfolio_json, market_json, news_json, events_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![input.review_id, input.manual_refresh_run_id, input.research_run_id,
+                input.portfolio_json, input.market_json, input.news_json, input.events_json],
         )?;
         Ok(self.connection.last_insert_rowid())
     }
@@ -851,7 +982,7 @@ impl DatabaseService {
                 "
                 SELECT ar.id, ar.review_id, ar.model, ar.prompt_version, ar.context_id, ar.provider, ar.request_status,
                        ar.error_code, ar.facts, ar.inferences, ar.risks, ar.report_json,
-                       ar.security_id, s.name, s.symbol, ar.created_at
+                       ar.security_id, s.name, s.symbol, ar.research_run_id, ar.created_at
                 FROM ai_reviews ar LEFT JOIN securities s ON s.id = ar.security_id WHERE ar.id = ?1
                 ",
                 [id],
@@ -869,7 +1000,7 @@ impl DatabaseService {
                 "
                 SELECT ar.id, ar.review_id, ar.model, ar.prompt_version, ar.context_id, ar.provider, ar.request_status,
                        ar.error_code, ar.facts, ar.inferences, ar.risks, ar.report_json,
-                       ar.security_id, s.name, s.symbol, ar.created_at
+                       ar.security_id, s.name, s.symbol, ar.research_run_id, ar.created_at
                 FROM ai_reviews ar LEFT JOIN securities s ON s.id = ar.security_id WHERE ar.review_id = ?1
                 ORDER BY ar.created_at DESC, ar.id DESC
                 LIMIT 1
@@ -889,7 +1020,7 @@ impl DatabaseService {
             "
             SELECT ar.id, ar.review_id, ar.model, ar.prompt_version, ar.context_id, ar.provider, ar.request_status,
                    ar.error_code, ar.facts, ar.inferences, ar.risks, ar.report_json,
-                   ar.security_id, s.name, s.symbol, ar.created_at
+                   ar.security_id, s.name, s.symbol, ar.research_run_id, ar.created_at
             FROM ai_reviews ar LEFT JOIN securities s ON s.id = ar.security_id
             WHERE ar.review_id = ?1
             ORDER BY CASE WHEN ar.security_id IS NULL THEN 1 ELSE 0 END, ar.created_at DESC, ar.id DESC
@@ -1079,6 +1210,36 @@ impl DatabaseService {
         self.list_news_articles_by_scope(&format!("JOIN manual_refresh_news_articles mrna ON mrna.news_article_id = n.id WHERE mrna.manual_refresh_run_id = {run_id}"))
     }
 
+    /// Uses the explicit news-to-security relation, never a display-string match. The query is
+    /// limited to the saved manual refresh boundary used by the current research run.
+    pub fn list_news_articles_for_run_and_security(
+        &self,
+        run_id: i64,
+        security_id: i64,
+    ) -> DatabaseResult<Vec<NewsArticleWithSecurity>> {
+        let mut statement = self.connection.prepare(
+            "SELECT n.id, n.title, n.source, n.source_type, n.published_at, n.fetch_time, n.summary,
+                    n.url, n.related_security_id, n.created_at, s.name, s.symbol
+             FROM news_articles n
+             JOIN manual_refresh_news_articles mrna ON mrna.news_article_id = n.id
+             JOIN news_security_links l ON l.news_article_id = n.id
+             LEFT JOIN securities s ON s.id = n.related_security_id
+             WHERE mrna.manual_refresh_run_id = ?1 AND l.security_id = ?2
+             ORDER BY n.published_at DESC, n.id DESC",
+        )?;
+        let records = statement
+            .query_map(params![run_id, security_id], |row| {
+                Ok(NewsArticleWithSecurity {
+                    article: Self::map_news_article(row)?,
+                    related_security_name: row.get(10)?,
+                    related_security_symbol: row.get(11)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into);
+        records
+    }
+
     pub fn list_events_for_manual_refresh_run(
         &self,
         run_id: i64,
@@ -1098,6 +1259,36 @@ impl DatabaseService {
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Uses the explicit event-to-security relation, avoiding fragile parsing of display labels.
+    pub fn list_events_for_run_and_security(
+        &self,
+        run_id: i64,
+        security_id: i64,
+    ) -> DatabaseResult<Vec<EventWithSecurity>> {
+        let mut statement = self.connection.prepare(
+            "SELECT e.id, e.event_type, e.title, e.security_id, e.event_time, e.timezone, e.source,
+                    e.source_url, e.status, e.created_at, s.name, s.symbol, 1
+             FROM events e
+             JOIN manual_refresh_events mre ON mre.event_id=e.id
+             JOIN event_security_links l ON l.event_id=e.id
+             LEFT JOIN securities s ON s.id=e.security_id
+             WHERE mre.manual_refresh_run_id=?1 AND l.security_id=?2
+             ORDER BY e.event_time DESC, e.id DESC",
+        )?;
+        let records = statement
+            .query_map(params![run_id, security_id], |row| {
+                Ok(EventWithSecurity {
+                    event: Self::map_event(row)?,
+                    security_name: row.get(10)?,
+                    security_symbol: row.get(11)?,
+                    holding_related: true,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into);
+        records
     }
 
     pub fn list_cash_accounts(&self) -> DatabaseResult<Vec<CashAccount>> {
@@ -2099,7 +2290,8 @@ impl DatabaseService {
             security_id: row.get(12)?,
             security_name: row.get(13)?,
             security_symbol: row.get(14)?,
-            created_at: row.get(15)?,
+            research_run_id: row.get(15)?,
+            created_at: row.get(16)?,
         })
     }
 
@@ -2516,7 +2708,7 @@ mod tests {
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 20);
+        assert_eq!(migration_count, 21);
         assert_eq!(table_count, 21);
     }
 
@@ -2784,6 +2976,7 @@ mod tests {
                 market_json: "[]".into(),
                 news_json: "[]".into(),
                 events_json: "[]".into(),
+                research_run_id: None,
             })
             .expect("create ai context");
         database
@@ -2798,6 +2991,7 @@ mod tests {
                 risks: "[]".into(),
                 report_json: None,
                 security_id: Some(security_a.id),
+                research_run_id: None,
             })
             .expect("create owned ai review");
 
@@ -3035,7 +3229,7 @@ mod tests {
             })
             .expect("verify provider settings migration");
 
-        assert_eq!(migration_count, 20);
+        assert_eq!(migration_count, 21);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -3059,6 +3253,38 @@ mod tests {
         assert_eq!(ai_provider_setting_count, 3);
         assert_eq!(watchlist_item_count, 1);
         assert_eq!(market_index_quotes_exists, 1);
+    }
+
+    #[test]
+    fn migration_021_adds_research_agent_tables_and_nullable_review_links() {
+        let database = DatabaseService::open_in_memory().expect("open migrated database");
+        let research_tables: i64 = database
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('research_runs', 'security_price_history', 'research_evidence')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("research tables exist");
+        let context_link: i64 = database
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('ai_review_contexts') WHERE name='research_run_id'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("context research link exists");
+        let review_link: i64 = database
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('ai_reviews') WHERE name='research_run_id'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("review research link exists");
+        assert_eq!(research_tables, 3);
+        assert_eq!(context_link, 1);
+        assert_eq!(review_link, 1);
     }
 
     #[test]
@@ -3107,7 +3333,7 @@ mod tests {
             })
             .expect("read migration count");
         assert_eq!(quote, ("000001.SH".into(), "1.25".into(), "1.25".into()));
-        assert_eq!(migration_count, 20);
+        assert_eq!(migration_count, 21);
 
         let database = DatabaseService { connection };
         let records = database
@@ -3234,7 +3460,7 @@ mod tests {
                 row.get(0)
             })
             .expect("read migration count");
-        assert_eq!(migration_count, 20);
+        assert_eq!(migration_count, 21);
     }
 
     #[test]
@@ -3305,7 +3531,7 @@ mod tests {
                 row.get(0)
             })
             .expect("read migration count");
-        assert_eq!(migration_count, 20);
+        assert_eq!(migration_count, 21);
     }
 
     #[test]

@@ -109,6 +109,11 @@ const MIGRATIONS: &[Migration] = &[
         checksum: "ai-provider-model-configuration-020-v1",
         sql: include_str!("../../migrations/020_ai_provider_model_configuration.sql"),
     },
+    Migration {
+        version: "021",
+        checksum: "research-agent-021-v1",
+        sql: include_str!("../../migrations/021_research_agent.sql"),
+    },
 ];
 
 pub(super) fn apply(connection: &mut Connection) -> DatabaseResult<()> {

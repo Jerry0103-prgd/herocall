@@ -28,6 +28,7 @@ export type AiResearchReport = {
   technicalAnalysis: string;
   strategyReference: string;
   conclusion: string;
+  actions: string;
 };
 
 export type DeepSeekStatus = { status: "已配置" | "未配置" };

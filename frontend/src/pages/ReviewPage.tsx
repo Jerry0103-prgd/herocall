@@ -15,6 +15,7 @@ const reportLabels = [
   ["消息面分析", "newsAnalysis"],
   ["技术面分析", "technicalAnalysis"],
   ["策略参考", "strategyReference"],
+  ["研究型操作策略", "actions"],
   ["综合结论", "conclusion"],
 ] as const;
 
@@ -55,6 +56,7 @@ export function ReviewPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [state, setState] = useState<AiGenerationState>("idle");
   const [message, setMessage] = useState<string | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
 
   const load = useCallback(async (date: string) => {
     setIsLoading(true);
@@ -80,13 +82,16 @@ export function ReviewPage() {
   async function generate() {
     setState("generating");
     setMessage(null);
+    setProgress("正在准备研究数据：检查关注标的行情、资讯、事件与历史走势…");
     try {
       const generated = await generateAiReviews(reviewDate);
       setReviews(generated.filter((review) => review.securityId !== null));
       setState("success");
+      setProgress(null);
       setMessage(`已生成 ${generated.length} 只关注标的的 AI复盘`);
     } catch (error) {
       setState("failed");
+      setProgress(null);
       setMessage(safeErrorMessage(error));
     }
   }
@@ -105,10 +110,11 @@ export function ReviewPage() {
       </header>
 
       {message ? <p className="notice" role="status">{message}</p> : null}
+      {progress ? <p className="notice" role="status">{progress}</p> : null}
       {!isLoading ? <div className="ai-active-provider" aria-label="当前AI模型"><span>当前模型</span><strong>{selectedProvider ? selectedProvider.displayName : "暂无已启用模型"}</strong>{selectedProvider ? <small>{selectedProvider.model}</small> : null}</div> : null}
       {!selectedProvider && !isLoading ? <div className="settings-card ai-empty-state">请先在设置中配置并开启一个 AI Provider。</div> : null}
       {isLoading ? <p className="table-state review-state">正在读取已保存的 AI复盘…</p> : null}
-      {!isLoading && selectedProvider && reviews.length === 0 ? <div className="settings-card ai-empty-state">尚未生成当日 AI复盘。请先更新今日市场快照，再点击“生成AI复盘”。</div> : null}
+      {!isLoading && selectedProvider && reviews.length === 0 ? <div className="settings-card ai-empty-state">尚未生成当日 AI复盘。点击“生成AI复盘”后，系统会自动准备可用的研究数据。</div> : null}
       {!isLoading && reviews.length > 0 ? <section className="ai-review-list" aria-label="AI复盘报告列表">{reviews.map((review) => <ReportTable key={review.id} review={review} />)}</section> : null}
     </section>
   );

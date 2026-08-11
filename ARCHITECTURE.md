@@ -28,7 +28,8 @@ React/TypeScript UI（侧栏、Dashboard、Portfolio、Settings、News、Review�
 | Market Data | 股票/指数/ETF 抓取、规范化、缓存与质量标记 | `market_service` 通过 Adapter 契约接入来源；仅真实数据；保存 source、market timestamp、fetched_at、delay status |
 | Information | 新闻、公告、社区内容的存储、持仓关联与来源 Adapter | 原文链接、发布时间、抓取时间和来源可追溯；社区内容非事实 |
 | Calendar | 公司和宏观事件 | 类型、日期、来源、确认状态均需保留 |
-| Review AI | 证据选择、结构化生成、人工复盘保存 | 强制 FACTS/INFERENCES/RISKS；不得提供交易承诺 |
+| Review AI | 证据选择、结构化生成、人工复盘保存 | 强制 FACTS/INFERENCES/ACTIONS/RISKS；不得提供收益或确定性承诺 |
+| Research Agent | 根据数据新鲜度准备行情、公告、事件与历史走势，并冻结证据边界 | 只经受控 Adapter 获取事实；模型不能自行浏览网页或补造数据 |
 
 Phase 5-A 的 Dashboard 通过 `get_asset_summary` 与 `get_market_snapshot` 两个 Tauri Command 读取 Rust 只读服务。当前报告聚合和指数持久化尚未实现，因此 Command 返回 `null` / `NO_DATA`，界面必须显示“暂无数据”，不得将缺失数据替换为零或演示价格。
 
@@ -67,6 +68,12 @@ Phase 7-D 的 Dashboard 通过 `refresh_today_market_snapshot` Command 调用 `m
 - SQLite 使用迁移管理、事务和本地备份策略；敏感导出须由用户显式确认。
 - 时间统一存储 ISO 8601 UTC，并保存交易所时区语义；界面以 `Asia/Shanghai` 展示交易日。
 - 核算采用定点 decimal/integer，不使用 JavaScript `number` 或 Rust `f64` 作为金额权威值。
+
+## 5.1 V1.1.0 Research Agent
+
+用户点击“生成AI复盘”后，`ai_service` 先以规则驱动的 Planner 检查最近一次手动快照是否超过五分钟；过期或不存在时，才通过 `MarketRefreshService` 与既有 Market/Disclosure Adapter 准备一次新的、来源可追溯的快照。随后 `research_service` 从本地 `security_price_history` 读取或经东方财富历史行情 Adapter 补齐 20 个交易日，Rust 本地计算 MA5/10/20、区间涨跌、20 日高低点和量能指标。
+
+一次生成创建唯一 `research_runs`，并将市场、资讯、事件 Evidence 写入 `research_evidence`；每只关注证券使用结构化证券关联取得 Top 10 去重资讯和事件。Provider 只收到该 Research Run 的 Evidence Context，不接收数量、成本、盈亏、账户资产或其他持仓记账字段。Provider 仍按设置中的已启用优先级只调用一个模型。
 
 ## 6. 建议的交付顺序
 
