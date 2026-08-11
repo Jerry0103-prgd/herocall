@@ -7,6 +7,18 @@ type ReleaseNote = {
 
 const releaseNotes: ReleaseNote[] = [
   {
+    version: "V1.1.1",
+    date: "2026-08-11",
+    summary: "市场情报与市场雷达",
+    groups: [
+      { title: "新增", items: [
+        "将市场资讯升级为按关注标的聚合的市场情报",
+        "新增来源可信度分级、主题聚类、传闻隔离与未来事件雷达",
+        "AI复盘接入市场情报 Evidence Context",
+      ] },
+    ],
+  },
+  {
     version: "V1.1.0",
     date: "2026-08-11",
     summary: "AI复盘升级为 Research Agent 模式",
@@ -102,7 +114,7 @@ const releaseNotes: ReleaseNote[] = [
         "修复取消关注逻辑，保留全部历史研究与交易数据",
         "支持证券代码或名称匹配本地已验证基础信息",
         "今日总览显示实际会调用的 AI Provider",
-        "统一个股资讯页面定位与文案",
+        "统一市场资讯页面定位与文案",
         "明确展示 AI Provider 的配置、启用与当前使用状态",
       ] },
     ],

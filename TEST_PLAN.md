@@ -70,3 +70,12 @@
 4. News/Event 仅通过 `news_security_links`/`event_security_links` 与 `security_id` 筛选，按 URL 或标题加时间去重，最多分别发送 10 条；禁止以用户可见关联字符串匹配。
 5. 序列化给 Provider 的 Evidence Context 不得包含 `quantity`、`averageCost`、`marketValue`、`dailyPnl`、`totalPnl` 或账户资产字段；缺少板块、资讯、事件或技术数据必须明确为 `NO_DATA`/`UNAVAILABLE`。
 6. Provider 输出必须包含 FACTS、INFERENCES、ACTIONS、RISKS 和 CONCLUSION；允许带触发条件的研究型动作表达，但拒绝目标价、收益承诺、保证收益、必涨/必跌和伪造事实。
+
+## 7. V1.1.1 市场情报与市场雷达回归
+
+1. 旧数据库升级至迁移 `022` 后，既有新闻、事件、AI 记录和 `schema_migrations` 均可读取；新增 `intelligence_items`、两张关联表与 `ai_review_contexts.intelligence_json` 存在，重复迁移不重复建表或丢失数据。
+2. `IntelligenceProvider` 的官方公告记录必须标记 `OFFICIAL`/A，公开财经快讯必须标记 `NEWS`/B；每条保存记录均验证来源、原文地址（如源提供）、发布时间、抓取时间、关联证券与去重键。源失败或无结果只能返回 `NO_DATA`/部分不可用，不生成内容。
+3. 同一来源、同一去重键重复采集只保留一条正文；同一主题按来源数量聚类并按可信度/重要性排序。D 级社区观点必须显示“社区观点，不代表事实”；E 级传闻必须显示“未经证实”。同主题且同证券出现 A/B 级确认来源时，只将相应 E 级传闻改为 `PARTIALLY_CONFIRMED`，不得将其提升为事实。
+4. 删除一只关注标的时，独有情报与本次刷新关联可删除；共享情报的其他证券关联必须保留。删除事务失败必须完整回滚。
+5. 市场雷达只显示未来 24 小时、3 天与 7 天范围内的带来源、原始时间、时区及确认状态事件；公告/交易所/监管来源可显示 A 级，其他来源不得伪装成官方确认。空态显示“暂无已识别的重要事件”。
+6. AI Context 只读取本次 `manual_refresh_run` 关联的情报。A/B 条目可进入 `verifiedIntelligence`；D/E 必须仅进入社区观点/未证实传闻区，System Prompt 明确禁止将其写入 FACTS。无情报时输入显式 `NO_DATA`，不得补造。

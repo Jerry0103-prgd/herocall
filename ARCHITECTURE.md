@@ -75,6 +75,14 @@ Phase 7-D 的 Dashboard 通过 `refresh_today_market_snapshot` Command 调用 `m
 
 一次生成创建唯一 `research_runs`，并将市场、资讯、事件 Evidence 写入 `research_evidence`；每只关注证券使用结构化证券关联取得 Top 10 去重资讯和事件。Provider 只收到该 Research Run 的 Evidence Context，不接收数量、成本、盈亏、账户资产或其他持仓记账字段。Provider 仍按设置中的已启用优先级只调用一个模型。
 
+## 5.2 V1.1.1 市场情报与市场雷达
+
+`intelligence_service` 是独立于既有 `news_service`/`event_service` 的应用服务。它通过 `IntelligenceProvider` Port 接收来源记录，负责确定性的关联证券、去重键、主题聚类、重要性排序和可信度标识；UI 仅通过 `get_market_intelligence` 与 `get_market_radar` Tauri Command 读取本地结果，绝不直连供应商。
+
+当前来源包含东方财富公告（`OFFICIAL`、A 级）与无 Cookie 的东方财富公开财经快讯（`NEWS`、B 级）。社区/社交舆情 Provider 是可选扩展，不进行 Cookie 抓取、不保存用户身份；未配置时明确显示部分来源不可用。可信度固定为 A 官方确认、B 权威媒体、C 行业信息、D 社区观点、E 未经证实传闻；D/E 只能作为观点、风险或待核验线索，不能作为客观事实。若同一证券、同一确定主题的 A/B 来源出现，已存 E 级传闻仅标记为 `PARTIALLY_CONFIRMED`，原记录仍保留以供审计。
+
+用户手动更新市场快照时，`market_refresh_service` 同步持久化本次公告和财经快讯的情报关联，并以 `manual_refresh_intelligence_items` 冻结本次范围。AI Research Agent 只读取当前 `manual_refresh_run` 的情报摘要：A/B 条目进入 `verifiedIntelligence`，社区观点和传闻置于单独字段并有“不得作为事实”的规则。市场雷达只使用本地保存、带来源与时区的未来事件，按未来 24 小时、3 天和 7 天显示；对非公告/交易所/监管来源的事件以 C 级而非官方事实显示。
+
 ## 6. 建议的交付顺序
 
 已建立 Rust Portfolio Engine、Market Data Adapter 契约及 SQLite 快照持久化。行情层包含 Tushare 日线 Adapter（仅 `CLOSED`）、东方财富公开行情 Adapter 和腾讯公开行情 Adapter（公开源始终 `DELAYED`）；HTTP 传输使用系统 `curl`，Tushare Token 只由系统凭据库读取并经标准输入传递，不进入命令行或日志。任何真实数据源接入之前，不向 UI 提供虚假“实时”状态。Portfolio Engine 按已确认交易日顺序处理流水；交易日有效性仍由交易日历模块在后续阶段提供。

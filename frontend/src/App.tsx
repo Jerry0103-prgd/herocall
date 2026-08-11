@@ -12,10 +12,10 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { loadInitializationStatus } from "./services/initialization";
 
 const pageTitles: Record<Exclude<PageId, "dashboard">, string> = {
-  news: "个股资讯",
+  news: "市场情报",
   review: "AI复盘",
   holdings: "我的关注",
-  calendar: "事件日历",
+  calendar: "市场雷达",
   settings: "设置",
 };
 

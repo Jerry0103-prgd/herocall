@@ -17,9 +17,9 @@ type NavigationItem = {
 const navigationItems: NavigationItem[] = [
   { id: "dashboard", label: "今日总览", symbol: "◈" },
   { id: "holdings", label: "我的关注", symbol: "◫" },
-  { id: "news", label: "个股资讯", symbol: "◌" },
+  { id: "news", label: "市场情报", symbol: "◌" },
   { id: "review", label: "AI复盘", symbol: "◒" },
-  { id: "calendar", label: "事件日历", symbol: "◷" },
+  { id: "calendar", label: "市场雷达", symbol: "◷" },
   { id: "settings", label: "设置", symbol: "◉" },
 ];
 

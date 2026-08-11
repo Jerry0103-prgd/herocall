@@ -2,7 +2,9 @@
 
 use std::{error::Error, fmt, fs, path::Path};
 
-use rusqlite::{params, Connection, OptionalExtension, Row, Transaction as SqliteTransaction};
+use rusqlite::{
+    params, Connection, OptionalExtension, Row, ToSql, Transaction as SqliteTransaction,
+};
 use serde::Serialize;
 use tauri::Manager;
 
@@ -221,6 +223,7 @@ pub struct NewAiReviewContext {
     pub market_json: String,
     pub news_json: String,
     pub events_json: String,
+    pub intelligence_json: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,6 +269,51 @@ pub struct NewsArticleWithSecurity {
     pub article: NewsArticle,
     pub related_security_name: Option<String>,
     pub related_security_symbol: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntelligenceItem {
+    pub id: i64,
+    pub title: String,
+    pub summary: String,
+    pub source: String,
+    pub source_type: String,
+    pub source_url: Option<String>,
+    pub published_at: String,
+    pub fetched_at: String,
+    pub credibility_level: String,
+    pub intelligence_type: String,
+    pub dedup_key: String,
+    pub topic_key: String,
+    pub importance_score: i64,
+    pub heat_score: i64,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewIntelligenceItem {
+    pub title: String,
+    pub summary: String,
+    pub source: String,
+    pub source_type: String,
+    pub source_url: Option<String>,
+    pub published_at: String,
+    pub fetched_at: String,
+    pub credibility_level: String,
+    pub intelligence_type: String,
+    pub dedup_key: String,
+    pub topic_key: String,
+    pub importance_score: i64,
+    pub heat_score: i64,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntelligenceItemWithSecurity {
+    pub item: IntelligenceItem,
+    pub security_id: i64,
+    pub security_name: String,
+    pub security_symbol: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -646,6 +694,127 @@ impl DatabaseService {
         Ok(article)
     }
 
+    /// Inserts one source-attributed intelligence record. A source may re-publish an item, but
+    /// a single `(dedup_key, source)` record is retained and can be linked to many securities.
+    pub fn upsert_intelligence_item(
+        &self,
+        input: NewIntelligenceItem,
+        security_ids: &[i64],
+    ) -> DatabaseResult<IntelligenceItem> {
+        let dedup_key = input.dedup_key.clone();
+        let source = input.source.clone();
+        self.connection.execute(
+            "INSERT INTO intelligence_items (
+                title, summary, source, source_type, source_url, published_at, fetched_at,
+                credibility_level, intelligence_type, dedup_key, topic_key, importance_score,
+                heat_score, status
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             ON CONFLICT(dedup_key, source) DO UPDATE SET
+                title=excluded.title, summary=excluded.summary, source_url=excluded.source_url,
+                published_at=excluded.published_at, fetched_at=excluded.fetched_at,
+                credibility_level=excluded.credibility_level,
+                intelligence_type=excluded.intelligence_type, topic_key=excluded.topic_key,
+                importance_score=excluded.importance_score, heat_score=excluded.heat_score,
+                status=excluded.status",
+            params![
+                input.title,
+                input.summary,
+                input.source,
+                input.source_type,
+                input.source_url,
+                input.published_at,
+                input.fetched_at,
+                input.credibility_level,
+                input.intelligence_type,
+                input.dedup_key,
+                input.topic_key,
+                input.importance_score,
+                input.heat_score,
+                input.status,
+            ],
+        )?;
+        let item = self.connection.query_row(
+            "SELECT id, title, summary, source, source_type, source_url, published_at, fetched_at,
+                    credibility_level, intelligence_type, dedup_key, topic_key, importance_score,
+                    heat_score, status
+             FROM intelligence_items WHERE dedup_key=?1 AND source=?2",
+            params![dedup_key, source],
+            Self::map_intelligence_item,
+        )?;
+        for security_id in security_ids {
+            self.connection.execute(
+                "INSERT OR IGNORE INTO intelligence_security_relations (intelligence_item_id, security_id) VALUES (?1, ?2)",
+                params![item.id, security_id],
+            )?;
+        }
+        Ok(item)
+    }
+
+    pub fn link_intelligence_items_to_manual_refresh_run(
+        &self,
+        run_id: i64,
+        item_ids: &[i64],
+    ) -> DatabaseResult<()> {
+        for item_id in item_ids {
+            self.connection.execute(
+                "INSERT OR IGNORE INTO manual_refresh_intelligence_items (manual_refresh_run_id, intelligence_item_id) VALUES (?1, ?2)",
+                params![run_id, item_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// When a first-party or professional source corroborates the exact same topic as a stored
+    /// rumour, retain the rumour for auditability but make its verification state explicit.
+    /// Matching is deliberately deterministic (`topic_key` plus a shared followed security), so
+    /// a loosely similar headline cannot silently be treated as confirmation.
+    pub fn mark_related_rumors_partially_confirmed(
+        &self,
+        topic_key: &str,
+        security_ids: &[i64],
+    ) -> DatabaseResult<()> {
+        for security_id in security_ids {
+            self.connection.execute(
+                "UPDATE intelligence_items
+                 SET status = 'PARTIALLY_CONFIRMED'
+                 WHERE source_type = 'RUMOR'
+                   AND topic_key = ?1
+                   AND id IN (
+                     SELECT intelligence_item_id
+                     FROM intelligence_security_relations
+                     WHERE security_id = ?2
+                   )",
+                params![topic_key, security_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn list_intelligence_for_followed_securities(
+        &self,
+    ) -> DatabaseResult<Vec<IntelligenceItemWithSecurity>> {
+        self.list_intelligence_by_scope(
+            "JOIN intelligence_security_relations r ON r.intelligence_item_id=i.id
+             JOIN watchlist_items w ON w.security_id=r.security_id
+             JOIN securities s ON s.id=r.security_id",
+            &[],
+        )
+    }
+
+    pub fn list_intelligence_for_run_and_security(
+        &self,
+        run_id: i64,
+        security_id: i64,
+    ) -> DatabaseResult<Vec<IntelligenceItemWithSecurity>> {
+        self.list_intelligence_by_scope(
+            "JOIN manual_refresh_intelligence_items mrii ON mrii.intelligence_item_id=i.id
+             JOIN intelligence_security_relations r ON r.intelligence_item_id=i.id
+             JOIN securities s ON s.id=r.security_id
+             WHERE mrii.manual_refresh_run_id=?1 AND r.security_id=?2",
+            &[&run_id, &security_id],
+        )
+    }
+
     pub fn upsert_daily_review(&self, input: NewDailyReview) -> DatabaseResult<DailyReview> {
         let review_date = input.review_date.clone();
         self.connection.execute(
@@ -852,10 +1021,11 @@ impl DatabaseService {
     pub fn create_ai_review_context(&self, input: NewAiReviewContext) -> DatabaseResult<i64> {
         self.connection.execute(
             "INSERT INTO ai_review_contexts (
-                review_id, manual_refresh_run_id, research_run_id, portfolio_json, market_json, news_json, events_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                review_id, manual_refresh_run_id, research_run_id, portfolio_json, market_json, news_json, events_json, intelligence_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![input.review_id, input.manual_refresh_run_id, input.research_run_id,
-                input.portfolio_json, input.market_json, input.news_json, input.events_json],
+                input.portfolio_json, input.market_json, input.news_json, input.events_json,
+                input.intelligence_json],
         )?;
         Ok(self.connection.last_insert_rowid())
     }
@@ -1487,6 +1657,35 @@ impl DatabaseService {
         )?;
         transaction.execute(
             "DELETE FROM ai_reviews WHERE security_id = ?1",
+            [security_id],
+        )?;
+
+        // Intelligence mirrors the same lifecycle as news/events: delete only bodies owned by
+        // this security, while preserving a shared item and its other security relations.
+        transaction.execute(
+            "DELETE FROM manual_refresh_intelligence_items
+             WHERE intelligence_item_id IN (
+                SELECT r.intelligence_item_id FROM intelligence_security_relations r
+                WHERE r.security_id=?1 AND NOT EXISTS (
+                    SELECT 1 FROM intelligence_security_relations other
+                    WHERE other.intelligence_item_id=r.intelligence_item_id AND other.security_id<>?1
+                )
+             )",
+            [security_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM intelligence_items
+             WHERE id IN (
+                SELECT r.intelligence_item_id FROM intelligence_security_relations r
+                WHERE r.security_id=?1 AND NOT EXISTS (
+                    SELECT 1 FROM intelligence_security_relations other
+                    WHERE other.intelligence_item_id=r.intelligence_item_id AND other.security_id<>?1
+                )
+             )",
+            [security_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM intelligence_security_relations WHERE security_id=?1",
             [security_id],
         )?;
 
@@ -2295,6 +2494,51 @@ impl DatabaseService {
         })
     }
 
+    fn map_intelligence_item(row: &Row<'_>) -> rusqlite::Result<IntelligenceItem> {
+        Ok(IntelligenceItem {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            summary: row.get(2)?,
+            source: row.get(3)?,
+            source_type: row.get(4)?,
+            source_url: row.get(5)?,
+            published_at: row.get(6)?,
+            fetched_at: row.get(7)?,
+            credibility_level: row.get(8)?,
+            intelligence_type: row.get(9)?,
+            dedup_key: row.get(10)?,
+            topic_key: row.get(11)?,
+            importance_score: row.get(12)?,
+            heat_score: row.get(13)?,
+            status: row.get(14)?,
+        })
+    }
+
+    fn list_intelligence_by_scope(
+        &self,
+        scope: &str,
+        parameters: &[&dyn ToSql],
+    ) -> DatabaseResult<Vec<IntelligenceItemWithSecurity>> {
+        let query = format!(
+            "SELECT i.id, i.title, i.summary, i.source, i.source_type, i.source_url,
+                    i.published_at, i.fetched_at, i.credibility_level, i.intelligence_type,
+                    i.dedup_key, i.topic_key, i.importance_score, i.heat_score, i.status,
+                    s.id, s.name, s.symbol
+             FROM intelligence_items i {scope}
+             ORDER BY i.importance_score DESC, i.published_at DESC, i.id DESC"
+        );
+        let mut statement = self.connection.prepare(&query)?;
+        let rows = statement.query_map(parameters, |row| {
+            Ok(IntelligenceItemWithSecurity {
+                item: Self::map_intelligence_item(row)?,
+                security_id: row.get(15)?,
+                security_name: row.get(16)?,
+                security_symbol: row.get(17)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     fn map_event(row: &Row<'_>) -> rusqlite::Result<EventRecord> {
         Ok(EventRecord {
             id: row.get(0)?,
@@ -2701,15 +2945,17 @@ mod tests {
                     'daily_reviews', 'ai_reviews', 'events', 'app_settings', 'market_index_quotes',
                     'manual_refresh_runs', 'ai_review_contexts', 'manual_refresh_news_articles',
                     'manual_refresh_events', 'watchlist_items', 'ai_provider_settings',
-                    'news_security_links', 'event_security_links'
+                    'news_security_links', 'event_security_links', 'research_runs',
+                    'security_price_history', 'research_evidence', 'intelligence_items',
+                    'intelligence_security_relations', 'manual_refresh_intelligence_items'
                 )",
                 [],
                 |row| row.get(0),
             )
             .expect("verify core tables");
 
-        assert_eq!(migration_count, 21);
-        assert_eq!(table_count, 21);
+        assert_eq!(migration_count, 22);
+        assert_eq!(table_count, 27);
     }
 
     #[test]
@@ -2930,6 +3176,27 @@ mod tests {
         database
             .link_event_to_security(shared_event.id, security_b.id)
             .expect("link shared event b");
+        let shared_intelligence = database
+            .upsert_intelligence_item(
+                NewIntelligenceItem {
+                    title: "共享情报".into(),
+                    summary: "共享情报摘要".into(),
+                    source: "测试公告来源".into(),
+                    source_type: "OFFICIAL".into(),
+                    source_url: Some("https://example.invalid/shared-intelligence".into()),
+                    published_at: "2026-08-10T08:00:00Z".into(),
+                    fetched_at: "2026-08-10T08:01:00Z".into(),
+                    credibility_level: "A".into(),
+                    intelligence_type: "DISCLOSURE".into(),
+                    dedup_key: "shared-intelligence".into(),
+                    topic_key: "shared-intelligence".into(),
+                    importance_score: 500,
+                    heat_score: 1,
+                    status: "ACTIVE".into(),
+                },
+                &[security_a.id, security_b.id],
+            )
+            .expect("create shared intelligence");
         let owned_event = database
             .create_event(NewEventRecord {
                 event_type: "MAJOR_MATTER".into(),
@@ -2958,6 +3225,9 @@ mod tests {
         database
             .link_events_to_manual_refresh_run(run.id, &[shared_event.id, owned_event.id])
             .expect("link events refresh");
+        database
+            .link_intelligence_items_to_manual_refresh_run(run.id, &[shared_intelligence.id])
+            .expect("link shared intelligence refresh");
         let review = database
             .upsert_daily_review(NewDailyReview {
                 review_date: "2026-08-10".into(),
@@ -2976,6 +3246,7 @@ mod tests {
                 market_json: "[]".into(),
                 news_json: "[]".into(),
                 events_json: "[]".into(),
+                intelligence_json: "{}".into(),
                 research_run_id: None,
             })
             .expect("create ai context");
@@ -3037,19 +3308,21 @@ mod tests {
             )
             .expect("verify owned records removed");
         assert_eq!(owned_counts, (0, 0, 0, 1, 0, 0, 0, 0));
-        let shared_state: (i64, i64, i64, i64) = database
+        let shared_state: (i64, i64, i64, i64, i64, i64) = database
             .connection
             .query_row(
                 "SELECT
                 (SELECT COUNT(*) FROM news_articles WHERE id = ?1),
                 (SELECT related_security_id FROM news_articles WHERE id = ?1),
                 (SELECT COUNT(*) FROM events WHERE id = ?2),
-                (SELECT security_id FROM events WHERE id = ?2)",
-                params![shared_news.id, shared_event.id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                (SELECT security_id FROM events WHERE id = ?2),
+                (SELECT COUNT(*) FROM intelligence_items WHERE id = ?3),
+                (SELECT COUNT(*) FROM intelligence_security_relations WHERE intelligence_item_id = ?3 AND security_id = ?4)",
+                params![shared_news.id, shared_event.id, shared_intelligence.id, security_b.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             )
             .expect("verify shared records remain");
-        assert_eq!(shared_state, (1, security_b.id, 1, security_b.id));
+        assert_eq!(shared_state, (1, security_b.id, 1, security_b.id, 1, 1));
     }
 
     #[test]
@@ -3229,7 +3502,7 @@ mod tests {
             })
             .expect("verify provider settings migration");
 
-        assert_eq!(migration_count, 21);
+        assert_eq!(migration_count, 22);
         assert_eq!(
             upgraded_security,
             ("SSE".into(), "ETF".into(), "T_PLUS_0".into())
@@ -3288,6 +3561,49 @@ mod tests {
     }
 
     #[test]
+    fn migration_022_upgrades_legacy_context_without_losing_records() {
+        let mut connection = Connection::open_in_memory().expect("create pre-022 database");
+        migrations::apply_021_for_upgrade_test(&mut connection).expect("apply through 021");
+        connection.execute(
+            "INSERT INTO daily_reviews (review_date, portfolio_summary, market_summary, holding_summary, risk_summary)
+             VALUES ('2026-08-11', '{}', '{}', '{}', '{}')",
+            [],
+        ).expect("insert legacy review");
+        let review_id = connection.last_insert_rowid();
+        connection
+            .execute(
+                "INSERT INTO manual_refresh_runs (started_at, completed_at, portfolio_json, news_status, events_status, status)
+             VALUES ('2026-08-11T08:00:00Z', '2026-08-11T08:01:00Z', '[]', 'NO_DATA', 'NO_DATA', 'NO_DATA')",
+                [],
+            )
+            .expect("insert legacy refresh run");
+        let run_id = connection.last_insert_rowid();
+        connection.execute(
+            "INSERT INTO ai_review_contexts (review_id, manual_refresh_run_id, portfolio_json, market_json, news_json, events_json)
+             VALUES (?1, ?2, '[]', '{}', '{}', '{}')",
+            params![review_id, run_id],
+        ).expect("insert legacy context");
+        let context_id = connection.last_insert_rowid();
+
+        migrations::apply(&mut connection).expect("upgrade through 022");
+        migrations::apply(&mut connection).expect("reapply through 022");
+
+        let tables: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('intelligence_items', 'intelligence_security_relations', 'manual_refresh_intelligence_items')",
+            [], |row| row.get(0),
+        ).expect("read intelligence tables");
+        let upgraded: (i64, String) = connection
+            .query_row(
+                "SELECT id, intelligence_json FROM ai_review_contexts WHERE id=?1",
+                [context_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read upgraded context");
+        assert_eq!(tables, 3);
+        assert_eq!(upgraded, (context_id, "{}".into()));
+    }
+
+    #[test]
     fn migration_011_backfills_index_change_percent_without_losing_quotes() {
         let mut connection = Connection::open_in_memory().expect("create pre-011 database");
         migrations::apply_010_for_upgrade_test(&mut connection).expect("apply through 010");
@@ -3333,7 +3649,7 @@ mod tests {
             })
             .expect("read migration count");
         assert_eq!(quote, ("000001.SH".into(), "1.25".into(), "1.25".into()));
-        assert_eq!(migration_count, 21);
+        assert_eq!(migration_count, 22);
 
         let database = DatabaseService { connection };
         let records = database
@@ -3460,7 +3776,7 @@ mod tests {
                 row.get(0)
             })
             .expect("read migration count");
-        assert_eq!(migration_count, 21);
+        assert_eq!(migration_count, 22);
     }
 
     #[test]
@@ -3531,7 +3847,7 @@ mod tests {
                 row.get(0)
             })
             .expect("read migration count");
-        assert_eq!(migration_count, 21);
+        assert_eq!(migration_count, 22);
     }
 
     #[test]

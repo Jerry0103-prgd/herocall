@@ -155,7 +155,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
         <div className="quick-link-grid">
           <button className="quick-link-card quick-link-card--primary" disabled={isRefreshing} onClick={() => void refreshMarketData()} type="button"><span>01</span><strong>{isRefreshing ? "正在更新…" : "更新今日市场快照"}</strong><small>保存本次市场、资讯与事件数据</small></button>
           <button className="quick-link-card" onClick={() => onNavigate("holdings")} type="button"><span>02</span><strong>我的关注</strong><small>查看当前关注标的</small></button>
-          <button className="quick-link-card" onClick={() => onNavigate("news")} type="button"><span>03</span><strong>个股资讯</strong><small>阅读关联资讯与来源</small></button>
+          <button className="quick-link-card" onClick={() => onNavigate("news")} type="button"><span>03</span><strong>市场情报</strong><small>查看关注标的的情报主题与来源</small></button>
           <button className="quick-link-card" onClick={() => onNavigate("review")} type="button"><span>04</span><strong>AI复盘</strong><small>生成并查看当日复盘</small></button>
         </div>
       </section>

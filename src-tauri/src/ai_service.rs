@@ -21,6 +21,7 @@ use crate::{
         NewResearchEvidence,
     },
     event_service::{EventService, EventServiceError, EventView},
+    intelligence_service::{IntelligenceService, IntelligenceServiceError},
     market_refresh_service::MarketRefreshService,
     news_service::{NewsArticleView, NewsService, NewsServiceError},
     research_service::{
@@ -140,6 +141,7 @@ pub struct AiReviewInput {
     pub events: Value,
     pub security: Value,
     pub sector: Value,
+    pub intelligence: Value,
     pub security_id: i64,
     pub security_name: String,
     pub security_symbol: String,
@@ -235,7 +237,7 @@ impl AiProviderAdapter for OpenAiCompatibleProviderAdapter {
 }
 
 fn research_report_system_prompt() -> &'static str {
-    "你是个人股票研究与复盘助手。仅依据输入 JSON 的 Evidence Context，输出严格 JSON 对象，必须包含：facts:[string]、inferences:[string]、actions:string、risks:[string]、stock_status:string、market_analysis:string、sector_analysis:string、news_analysis:string、technical_analysis:string、strategy_reference:string、conclusion:string。FACTS 只能陈述带 source、时间或 evidence 的输入事实；INFERENCES 必须说明基于哪些事实推断；ACTIONS 是研究型的条件化策略参考；RISKS 只列不确定性、数据缺失或需核验事项。逐项输出：当前个股情况、市场环境、所属板块/行业、消息面、技术面、策略参考、综合结论。技术面只能基于 technical 字段；sector.status 为 UNAVAILABLE 或资料缺失时，必须写“暂无可验证板块数据”，不得猜测行业或概念。news 中 COMMUNITY 只能称为“社区观点”，不得作为事实。不得提及持仓成本、盈亏、是否实际持仓或账户资产。允许以条件化语言表达买入、卖出、加仓、减仓、持有、观望、止盈、止损等研究动作，但必须给出触发条件、依据与风险；严禁目标价、收益预测、收益承诺、保证收益、必涨、必跌、稳赚或任何未来确定性陈述。数据缺失时明确“暂无数据”或“未确认”，绝不补造事实。"
+    "你是个人股票研究与复盘助手。仅依据输入 JSON 的 Evidence Context，输出严格 JSON 对象，必须包含：facts:[string]、inferences:[string]、actions:string、risks:[string]、stock_status:string、market_analysis:string、sector_analysis:string、news_analysis:string、technical_analysis:string、strategy_reference:string、conclusion:string。FACTS 只能陈述带 source、时间或 evidence 的输入事实；INFERENCES 必须说明基于哪些事实推断；ACTIONS 是研究型的条件化策略参考；RISKS 只列不确定性、数据缺失或需核验事项。逐项输出：当前个股情况、市场环境、所属板块/行业、消息面、技术面、策略参考、综合结论。技术面只能基于 technical 字段；sector.status 为 UNAVAILABLE 或资料缺失时，必须写“暂无可验证板块数据”，不得猜测行业或概念。intelligence.verifiedIntelligence 中仅 A/B 级信息可作为事实；communityOpinion 只能称为社区观点，rumors 只能作为未证实传闻、风险或观察项，绝不可作为 FACTS。不得提及持仓成本、盈亏、是否实际持仓或账户资产。允许以条件化语言表达买入、卖出、加仓、减仓、持有、观望、止盈、止损等研究动作，但必须给出触发条件、依据与风险；严禁目标价、收益预测、收益承诺、保证收益、必涨、必跌、稳赚或任何未来确定性陈述。数据缺失时明确“暂无数据”或“未确认”，绝不补造事实。"
 }
 
 fn provider_display_name(provider: &str) -> &'static str {
@@ -311,6 +313,11 @@ impl From<NewsServiceError> for AiServiceError {
 }
 impl From<EventServiceError> for AiServiceError {
     fn from(error: EventServiceError) -> Self {
+        Self::Context(error.to_string())
+    }
+}
+impl From<IntelligenceServiceError> for AiServiceError {
+    fn from(error: IntelligenceServiceError) -> Self {
         Self::Context(error.to_string())
     }
 }
@@ -541,6 +548,7 @@ impl AiService {
             events: json!({"status": if event_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": event_items}),
             security: json!({"name": "历史综合复盘", "status": "LEGACY"}),
             sector: json!({"status": "UNAVAILABLE"}),
+            intelligence: json!({"status": "NO_DATA"}),
             security_id: 0,
             security_name: "历史综合复盘".into(),
             security_symbol: String::new(),
@@ -566,6 +574,7 @@ impl AiService {
             market_json: serde_json::to_string(&input.market)?,
             news_json: serde_json::to_string(&input.news)?,
             events_json: serde_json::to_string(&input.events)?,
+            intelligence_json: serde_json::to_string(&input.intelligence)?,
         })?;
         ai_diagnostic(format!(
             "ai_review_context_written=true context_id={context_id}"
@@ -635,6 +644,11 @@ impl AiService {
                 run.id,
                 security.security_id,
             )?);
+            let intelligence = IntelligenceService::summary_for_run_and_security(
+                database,
+                run.id,
+                security.security_id,
+            )?;
             let input = AiReviewInput {
                 prompt_version: PROMPT_VERSION.into(),
                 manual_refresh_run_id: run.id,
@@ -651,6 +665,7 @@ impl AiService {
                 events: json!({"status": if event_items.is_empty() { "NO_DATA" } else { "AVAILABLE" }, "items": event_items}),
                 security: security_context,
                 sector: json!({"status": "UNAVAILABLE", "reason": "当前没有可靠板块数据源"}),
+                intelligence,
                 security_id: security.security_id,
                 security_name: security.name,
                 security_symbol: security.symbol,
@@ -688,6 +703,7 @@ impl AiService {
             market_json: serde_json::to_string(&input.market)?,
             news_json: serde_json::to_string(&input.news)?,
             events_json: serde_json::to_string(&input.events)?,
+            intelligence_json: serde_json::to_string(&input.intelligence)?,
         })?;
         let stored = database.create_ai_review(NewAiReview {
             review_id: input.daily_review.id,
@@ -1435,6 +1451,7 @@ mod tests {
                 market_json: "{}".into(),
                 news_json: "{}".into(),
                 events_json: "{}".into(),
+                intelligence_json: "{}".into(),
                 research_run_id: None,
             })
             .unwrap();

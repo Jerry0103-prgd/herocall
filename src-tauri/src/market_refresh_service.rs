@@ -13,6 +13,7 @@ use crate::{
     database::service::{DatabaseError, DatabaseService, NewManualRefreshRun},
     disclosure_adapter::{DisclosureSecurity, EastmoneyAnnouncementAdapter},
     event_service::{EventDataAdapter, EventService},
+    intelligence_service::{EastmoneyFlashNewsProvider, IntelligenceProvider, IntelligenceService},
     market_service::{
         EastmoneyAdapter, MarketDataAdapter, MarketFetchRequest, MarketPhase, MarketSecurity,
         MarketService, MarketSnapshot, MarketStoreError, TencentAdapter, TushareAdapter,
@@ -164,11 +165,23 @@ impl MarketRefreshService {
         news_security_ids.sort_unstable();
         news_security_ids.dedup();
         let mut news = Vec::new();
+        let mut intelligence_item_ids = Vec::new();
         let mut news_save_issue = None;
         for input in news_inputs {
             let related_security_id = input.related_security_id;
+            let intelligence_input = IntelligenceService::from_news_input(&input);
             match NewsService::ingest(database, input) {
-                Ok(article) => news.push(article),
+                Ok(article) => {
+                    news.push(article);
+                    if let Some(intelligence_input) = intelligence_input {
+                        match IntelligenceService::ingest(database, intelligence_input) {
+                            Ok(item) => intelligence_item_ids.push(item.id),
+                            Err(error) => {
+                                news_diagnostic(format!("intelligence_official_save_failed related_security_id={related_security_id:?} error={error}"));
+                            }
+                        }
+                    }
+                }
                 Err(error) => {
                     news_diagnostic(format!(
                         "news_article_save_failed related_security_id={related_security_id:?} error={error}"
@@ -181,6 +194,24 @@ impl MarketRefreshService {
             .into_iter()
             .filter_map(|input| EventService::ingest(database, input).ok())
             .collect::<Vec<_>>();
+
+        // A separate public news Provider supplements official notices. A source failure is
+        // intentionally non-fatal: existing official intelligence remains visible.
+        let flash_provider = EastmoneyFlashNewsProvider;
+        let flash_issue = match flash_provider.fetch(&disclosure_securities) {
+            Ok(inputs) => {
+                for input in inputs {
+                    match IntelligenceService::ingest(database, input) {
+                        Ok(item) => intelligence_item_ids.push(item.id),
+                        Err(error) => {
+                            news_diagnostic(format!("intelligence_news_save_failed error={error}"))
+                        }
+                    }
+                }
+                None
+            }
+            Err(error) => Some(error.to_string()),
+        };
 
         let holding_configuration = if TushareAdapter::is_configured() {
             "CONFIGURED"
@@ -217,12 +248,15 @@ impl MarketRefreshService {
             run.id,
             &events.iter().map(|item| item.id).collect::<Vec<_>>(),
         )?;
+        intelligence_item_ids.sort_unstable();
+        intelligence_item_ids.dedup();
+        database.link_intelligence_items_to_manual_refresh_run(run.id, &intelligence_item_ids)?;
         Ok(ManualMarketSnapshotView {
             run_id: run.id,
             holdings: holdings_view,
             indices: indices_view,
             news: SnapshotSectionView {
-                source: "东方财富公告".into(),
+                source: "东方财富公告 / 财经快讯".into(),
                 status: if news.is_empty() {
                     "NO_DATA".into()
                 } else {
@@ -230,15 +264,18 @@ impl MarketRefreshService {
                 },
                 item_count: news.len(),
                 updated_at: news.iter().map(|item| item.fetch_time.clone()).max(),
-                message: news_fetch_issue.or(news_save_issue).or_else(|| {
-                    news.is_empty().then(|| {
-                        if disclosure_securities.is_empty() {
-                            "NO_DATA：当前没有关注标的，未请求东方财富公告。".into()
-                        } else {
-                            "NO_DATA：东方财富未返回与当前关注标的关联的公开公告。".into()
-                        }
-                    })
-                }),
+                message: news_fetch_issue
+                    .or(news_save_issue)
+                    .or(flash_issue)
+                    .or_else(|| {
+                        news.is_empty().then(|| {
+                            if disclosure_securities.is_empty() {
+                                "NO_DATA：当前没有关注标的，未请求东方财富公告。".into()
+                            } else {
+                                "NO_DATA：东方财富未返回与当前关注标的关联的公开公告。".into()
+                            }
+                        })
+                    }),
             },
             events: SnapshotSectionView {
                 source: "东方财富公告".into(),

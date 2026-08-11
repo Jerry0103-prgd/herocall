@@ -36,7 +36,7 @@
 | `event_security_links` | `event_id`, `security_id` | 事件与证券的多对多关联；删除一只关注标的时保护其他证券仍需的事件正文 |
 | `app_settings` | `setting_key`, `setting_value`, `updated_at` | 非敏感应用状态；V0.8.1 仅保存首次启动完成标志，禁止存储 API Key、Token 或券商信息 |
 
-`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）至 `021`（Research Agent）；迁移重复执行不会重新执行已应用版本，已应用迁移的校验标识不匹配会阻止继续启动。
+`schema_migrations` 是迁移系统内部表，保存迁移版本、校验标识与应用时间。当前已定义 `001`（数据库核心）至 `022`（市场情报与市场雷达）；迁移重复执行不会重新执行已应用版本，已应用迁移的校验标识不匹配会阻止继续启动。
 
 ### V1.1.0 Research Agent 追加实体（迁移 `021`）
 
@@ -47,6 +47,17 @@
 | `research_evidence` | `research_run_id`, `security_id`, `evidence_type`, `source*`, `payload_json` | 冻结实际送入模型前的市场、资讯、事件证据载荷，保留可审计追溯信息。 |
 
 `ai_review_contexts.research_run_id` 与 `ai_reviews.research_run_id` 由 `021` 追加，旧记录为 `NULL` 且保持可读；新生成的逐证券报告必须绑定当前 `research_runs`。历史 `portfolio_json` 字段为兼容审计列，V1.1.0 Provider 输入不会序列化账户、数量、成本或盈亏字段。
+
+### V1.1.1 市场情报追加实体（迁移 `022`）
+
+| 表/字段 | 主要字段 | 说明 |
+| --- | --- | --- |
+| `intelligence_items` | `title`, `summary`, `source`, `source_type`, `source_url`, `published_at`, `fetched_at`, `credibility_level`, `dedup_key`, `topic_key`, `importance_score`, `heat_score`, `status` | 可追溯市场情报正文；来源类型限定为 `OFFICIAL`、`NEWS`、`INDUSTRY`、`COMMUNITY`、`SOCIAL`、`RUMOR`，可信度限定 A-E。`UNVERIFIED` 与 `PARTIALLY_CONFIRMED` 明确标识传闻验证状态。 |
+| `intelligence_security_relations` | `intelligence_item_id`, `security_id` | 情报与关注标的的多对多关联；删除单一标的时保留共享情报及其他关联。 |
+| `manual_refresh_intelligence_items` | `manual_refresh_run_id`, `intelligence_item_id` | 绑定一次用户手动更新实际收集到的情报，供 AI Context 审计和冻结。 |
+| `ai_review_contexts.intelligence_json` | JSON | 迁移 `022` 新增的冻结情报摘要。A/B 验证信息、社区观点与传闻分区保存；不保存 Key 或完整提示词。 |
+
+迁移 `022` 只新增三张表、索引及一个带默认值的审计列，不删除或变更既有新闻、事件、AI 记录和用户数据。
 
 ## 3. 延后实现的逻辑实体
 

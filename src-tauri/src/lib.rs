@@ -8,6 +8,7 @@ mod disclosure_adapter;
 // Phase 6-D defines the future Adapter ingestion/CRUD API; calendar UI is read-only.
 mod event_service;
 mod initialization_service;
+mod intelligence_service;
 mod market_refresh_service;
 pub mod market_service;
 #[allow(dead_code)] // Phase 6-A defines the future Adapter ingestion/CRUD API; UI is read-only.
@@ -28,6 +29,7 @@ use dashboard_service::{
 };
 use event_service::{EventService, EventView};
 use initialization_service::{InitializationService, InitializationStatusView};
+use intelligence_service::{IntelligenceService, MarketIntelligenceView, MarketRadarView};
 use market_refresh_service::{ManualMarketSnapshotView, MarketRefreshService, MarketRefreshView};
 use news_service::{HoldingNewsView, NewsService};
 use portfolio_ui_service::{
@@ -244,6 +246,13 @@ fn get_holding_news_articles(app: tauri::AppHandle) -> Result<HoldingNewsView, S
 }
 
 #[tauri::command]
+fn get_market_intelligence(app: tauri::AppHandle) -> Result<MarketIntelligenceView, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    IntelligenceService::list_for_followed_securities(&database).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn get_daily_review(app: tauri::AppHandle, review_date: String) -> Result<DailyReviewView, String> {
     let database = database::service::DatabaseService::open_app_database(&app)
         .map_err(|error| error.to_string())?;
@@ -361,6 +370,14 @@ fn get_calendar_events(
 }
 
 #[tauri::command]
+fn get_market_radar(app: tauri::AppHandle) -> Result<MarketRadarView, String> {
+    let database = database::service::DatabaseService::open_app_database(&app)
+        .map_err(|error| error.to_string())?;
+    let events = EventService::list(&database, None).map_err(|error| error.to_string())?;
+    Ok(IntelligenceService::market_radar(events))
+}
+
+#[tauri::command]
 fn get_initialization_status(app: tauri::AppHandle) -> Result<InitializationStatusView, String> {
     let database = database::service::DatabaseService::open_app_database(&app)
         .map_err(|error| error.to_string())?;
@@ -407,6 +424,7 @@ pub fn run() {
             create_cash_account,
             create_database_backup,
             get_holding_news_articles,
+            get_market_intelligence,
             get_daily_review,
             generate_daily_review,
             get_ai_service_status,
@@ -421,6 +439,7 @@ pub fn run() {
             generate_ai_reviews_for_snapshot,
             get_ai_reviews_for_date,
             get_calendar_events,
+            get_market_radar,
             get_initialization_status,
             complete_initialization
         ])

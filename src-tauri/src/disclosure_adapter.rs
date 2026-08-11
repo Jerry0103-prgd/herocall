@@ -25,6 +25,7 @@ const EASTMONEY_ANNOUNCEMENT_DETAIL: &str = "https://data.eastmoney.com/notices/
 pub struct DisclosureSecurity {
     pub id: i64,
     pub symbol: String,
+    pub name: String,
 }
 
 impl From<&MarketSecurity> for DisclosureSecurity {
@@ -32,6 +33,7 @@ impl From<&MarketSecurity> for DisclosureSecurity {
         Self {
             id: value.security_id,
             symbol: value.symbol.clone(),
+            name: value.name.clone(),
         }
     }
 }
@@ -135,7 +137,10 @@ impl NewsDataAdapter for EastmoneyAnnouncementAdapter {
     fn source(&self) -> NewsDataSource {
         NewsDataSource {
             name: "东方财富公告".into(),
-            source_type: NewsSourceType::Media,
+            // This adapter returns listed-company announcement records.  They are not a media
+            // interpretation, so their downstream intelligence record is allowed to carry the
+            // official (A) credibility label.
+            source_type: NewsSourceType::Official,
         }
     }
     fn fetch_articles(
@@ -181,7 +186,7 @@ impl Disclosure {
         NewsArticleInput {
             title: self.title.clone(),
             source: "东方财富公告".into(),
-            source_type: NewsSourceType::Media,
+            source_type: NewsSourceType::Official,
             published_at: self
                 .published_at
                 .to_rfc3339_opts(SecondsFormat::Millis, true),
